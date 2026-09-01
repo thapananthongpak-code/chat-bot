@@ -147,6 +147,10 @@
     const input = document.getElementById("input");
     const messages = document.getElementById("messages");
 
+    // เบราว์เซอร์ถือประวัติบทสนทนาเอง เพราะฝั่งเซิร์ฟเวอร์เป็น stateless (รันบน serverless ได้)
+    let history = [];
+    let userName = "";
+
     // เรียงคำยาวไว้ก่อนคำสั้น เพื่อให้ regex จับ "INSERT INTO" ก่อน "INTO"
     const SQL_KEYWORDS = ["INSERT INTO","CREATE DATABASE","CREATE TABLE","CREATE VIEW","CREATE INDEX","DROP DATABASE","DROP TABLE","ALTER TABLE","BACKUP DATABASE","FULL OUTER JOIN","LEFT JOIN","RIGHT JOIN","INNER JOIN","OUTER JOIN","GROUP BY","ORDER BY","PRIMARY KEY","FOREIGN KEY","AUTO_INCREMENT","IS NOT NULL","IS NULL","NOT NULL","UNION ALL","SELECT","DISTINCT","VALUES","UPDATE","DELETE","REFERENCES","HAVING","BETWEEN","EXISTS","DEFAULT","UNIQUE","COALESCE","IFNULL","COUNT","UNION","WHERE","LIMIT","CHECK","INDEX","FROM","JOIN","LIKE","CASE","WHEN","THEN","ELSE","DESC","NULL","INTO","TOP","SET","AND","NOT","AVG","SUM","MIN","MAX","ASC","END","ON","AS","OR","IN"];
 
@@ -265,14 +269,11 @@
     input.addEventListener("keydown", e => { if (e.key === "Enter") sendMessage(); });
     document.getElementById("nameInput").addEventListener("keydown", e => { if (e.key === "Enter") submitName(); });
 
-    async function submitName() {
+    function submitName() {
       const name = document.getElementById("nameInput").value.trim();
       if (!name) return;
-      await fetch("/set_name", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name })
-      });
+      userName = name;
+      history = [];
       document.getElementById("nameModal").style.display = "none";
       addMessage("สวัสดีครับคุณ" + name + " 👋 ผมเป็นผู้เชี่ยวชาญด้าน SQL และฐานข้อมูลครับ\n\nถามได้ทุกเรื่อง ตั้งแต่คำสั่งพื้นฐานอย่าง SELECT / WHERE ไปจนถึง JOIN, GROUP BY, การออกแบบตาราง และการป้องกัน SQL Injection\n\nหรือจะโยนโจทย์มาให้ผมเขียนคิวรีให้ก็ได้ครับ", "bot");
       input.focus();
@@ -299,10 +300,15 @@
         const res = await fetch("/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ message: text, history, name: userName })
         });
         const data = await res.json();
         typing.remove();
+        if (data.reply) {
+          history.push({ role: "user", content: text });
+          history.push({ role: "assistant", content: data.reply });
+          history = history.slice(-30);  // ให้ตรงกับ MAX_HISTORY ฝั่งเซิร์ฟเวอร์
+        }
         addMessage(data.reply || data.error || "ขออภัยครับ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะครับ", "bot");
       } catch (err) {
         typing.remove();

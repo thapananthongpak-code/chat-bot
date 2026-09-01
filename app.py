@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, abort, session
+from flask import Flask, render_template, request, jsonify, abort
 from dotenv import load_dotenv
 import anthropic
 from linebot.v3 import WebhookHandler
@@ -11,7 +11,6 @@ import knowledge_base as kb
 
 load_dotenv()
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 if not ANTHROPIC_API_KEY:
@@ -22,8 +21,15 @@ CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5").strip()
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+# บน Vercel ระบบไฟล์เป็น read-only ยกเว้น /tmp การเขียนที่อื่นจะทำให้แอปพังตั้งแต่ import
+ON_SERVERLESS = bool(os.getenv("VERCEL"))
+DATA_DIR = os.getenv("DATA_DIR") or (
+    "/tmp/ch-bot-data" if ON_SERVERLESS else os.path.join(os.path.dirname(__file__), "data")
+)
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except OSError as exc:
+    print(f"[!] สร้างโฟลเดอร์เก็บประวัติไม่ได้ ({exc}) — บอทจะทำงานต่อได้แต่ไม่จำบทสนทนา LINE")
 
 SYSTEM_PROMPT = """
 คุณคือ "ครูเอสคิว" ผู้เชี่ยวชาญด้าน SQL และฐานข้อมูลเชิงสัมพันธ์ (Relational Database)
@@ -59,17 +65,20 @@ MAX_HISTORY = 30  # เก็บสูงสุด 30 ข้อความล�
 
 def load_line_history(user_id):
     path = os.path.join(DATA_DIR, f"line_{user_id}.json")
-    if os.path.exists(path):
+    try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    return []
+    except (OSError, ValueError):
+        # ไม่มีไฟล์ อ่านไม่ได้ หรือไฟล์เสีย — เริ่มบทสนทนาใหม่ ดีกว่าปล่อยให้ 500
+        return []
 
 def save_line_history(user_id, history):
     path = os.path.join(DATA_DIR, f"line_{user_id}.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(history[-MAX_HISTORY:], f, ensure_ascii=False, indent=2)
-
-web_chats = {}
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(history[-MAX_HISTORY:], f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+        print(f"[!] บันทึกประวัติ LINE ไม่ได้: {exc}")
 
 def build_reference(user_message):
     """ดึงหัวข้อจากคลังความรู้ที่ตรงกับคำถามล่าสุด เพื่อแนบไปกับ prompt"""
@@ -127,30 +136,28 @@ def chat_with_claude(history, system=SYSTEM_PROMPT):
 def index():
     return render_template("index.html")
 
-@app.route("/set_name", methods=["POST"])
-def set_name():
-    name = request.json.get("name", "").strip()
-    session_id = os.urandom(8).hex()
-    session["id"] = session_id
-    system = SYSTEM_PROMPT
-    if name:
-        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
-    web_chats[session_id] = {"system": system, "history": []}
-    return jsonify({"ok": True, "name": name})
-
 @app.route("/chat", methods=["POST"])
 def chat_api():
-    user_message = request.json.get("message", "")
+    """แชตหน้าเว็บเป็นแบบ stateless — เบราว์เซอร์ถือประวัติแล้วส่งมาให้ทุกครั้ง
+    เพราะบน serverless แต่ละคำขออาจตกไปคนละ instance ตัวแปรในหน่วยความจำจึงใช้ไม่ได้"""
+    payload = request.get_json(silent=True) or {}
+    user_message = (payload.get("message") or "").strip()
     if not user_message:
-        return jsonify({"error": "no message"}), 400
-    session_id = session.get("id")
-    if not session_id or session_id not in web_chats:
-        return jsonify({"error": "กรุณาตั้งชื่อก่อนเริ่มใช้งานครับ"}), 400
-    chat = web_chats[session_id]
-    chat["history"].append({"role": "user", "content": user_message})
-    reply = chat_with_claude(chat["history"], system=chat["system"])
-    chat["history"].append({"role": "assistant", "content": reply})
-    return jsonify({"reply": reply})
+        return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
+
+    history = [
+        {"role": m.get("role"), "content": str(m.get("content") or "")[:8000]}
+        for m in (payload.get("history") or [])[-MAX_HISTORY:]
+        if m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+    history.append({"role": "user", "content": user_message})
+
+    system = SYSTEM_PROMPT
+    name = (payload.get("name") or "").strip()[:30]
+    if name:
+        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
+
+    return jsonify({"reply": chat_with_claude(history, system=system)})
 
 def to_line_text(text):
     """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง"""
