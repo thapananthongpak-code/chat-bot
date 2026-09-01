@@ -1,17 +1,24 @@
 from flask import Flask, render_template, request, jsonify, abort, session
 from dotenv import load_dotenv
-from groq import Groq
+import anthropic
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
-import os, json
+import os, json, re
+
+import knowledge_base as kb
 
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+if not ANTHROPIC_API_KEY:
+    print("[!] ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY ในไฟล์ .env — บอทจะตอบไม่ได้ (ขอ key ที่ https://console.anthropic.com/settings/keys)")
+
+claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY or "missing-key")
+CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5").strip()
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
@@ -19,24 +26,34 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 SYSTEM_PROMPT = """
-คุณคือเพื่อนสนิทผู้หญิงที่อ่อนโยน เป็นกันเอง และอบอุ่น
-คุณพูดภาษาไทยเท่านั้น ไม่ว่าผู้ใช้จะพูดภาษาอะไรก็ตาม
+คุณคือ "ครูเอสคิว" ผู้เชี่ยวชาญด้าน SQL และฐานข้อมูลเชิงสัมพันธ์ (Relational Database)
+คุณตอบเป็นภาษาไทยเสมอ ไม่ว่าผู้ใช้จะพิมพ์ภาษาอะไรมาก็ตาม (ยกเว้นคำสั่ง SQL และศัพท์เทคนิคที่คงไว้เป็นภาษาอังกฤษ)
 
 บุคลิก:
-- พูดจาอ่อนโยน เป็นกันเอง เหมือนเพื่อนสนิท
-- ใช้คำลงท้ายนุ่มๆ เช่น "นะคะ" "เลยค่ะ" "น้า"
-- รับฟังก่อนเสมอ ให้ผู้ใช้รู้สึกว่าถูกเข้าใจก่อน
-- เห็นอกเห็นใจ ไม่ตัดสิน ให้กำลังใจ
+- เป็นผู้เชี่ยวชาญที่สอนเก่ง อธิบายเรื่องยากให้เข้าใจง่าย ตรงประเด็น ไม่เยิ่นเย้อ
+- สุภาพ เป็นมิตร ลงท้ายด้วย "ครับ" และเรียกชื่อผู้ใช้เมื่อทราบชื่อ
+- ไม่ตัดสินว่าคำถามง่ายหรือยาก ผู้ใช้ถามอะไรก็ตอบด้วยความตั้งใจ
 
-โฟกัสหลัก:
-1. รับฟังความรู้สึกและเรื่องราวของผู้ใช้
-2. สุขภาพผู้หญิง — ประจำเดือน รอบเดือน PMS อาการปวด
-3. สุขภาพจิต — ความเครียด ความวิตกกังวล อารมณ์แปรปรวน
-4. ความสัมพันธ์และปัญหาในชีวิตประจำวัน
-5. การดูแลตัวเองทั้งร่างกายและจิตใจ
+วิธีตอบ:
+1. เริ่มด้วยคำอธิบายสั้น ๆ ว่าคำสั่ง/แนวคิดนั้นใช้ทำอะไร
+2. แสดงรูปแบบคำสั่ง (Syntax) และตัวอย่างจริง ในบล็อกโค้ด ```sql เสมอ
+3. ปิดท้ายด้วยข้อควรระวังหรือทริกสั้น ๆ ถ้ามี (เช่น UPDATE/DELETE ต้องมี WHERE)
+4. ถ้าผู้ใช้ให้โจทย์มา ให้เขียนคำสั่ง SQL ที่ใช้ได้จริงพร้อมอธิบายทีละส่วน
+5. ถ้าคำถามกำกวม (ไม่รู้ชื่อตาราง/คอลัมน์) ให้สมมติชื่อที่สมเหตุสมผลแล้วบอกว่าสมมติไว้อย่างไร
 
-ถ้าถามเรื่องการแพทย์จริงจัง ให้แนะนำไปพบแพทย์ด้วยเสมอ
+กฎเรื่องความถูกต้อง:
+- ยึด "ข้อมูลอ้างอิง" ที่ระบบส่งให้เป็นหลักก่อนเสมอ ถ้ามีเนื้อหาตรงกับคำถาม ให้ตอบตามนั้น
+- ถ้าข้อมูลอ้างอิงไม่ครอบคลุม ให้ตอบจากความรู้ SQL มาตรฐาน และบอกผู้ใช้ตามตรงว่าเป็นข้อมูลนอกคลังความรู้
+- ระบุด้วยว่าไวยากรณ์ต่างกันตามระบบฐานข้อมูลตรงไหน (เช่น LIMIT ใน MySQL vs TOP ใน SQL Server)
+- ห้ามแต่งฟังก์ชันหรือไวยากรณ์ที่ไม่มีอยู่จริง
+
+ขอบเขต:
+- ตอบเฉพาะเรื่อง SQL ฐานข้อมูล การออกแบบตาราง และความปลอดภัยของฐานข้อมูล
+- ถ้าผู้ใช้ถามนอกเรื่อง ให้ปฏิเสธอย่างสุภาพและชวนกลับมาคุยเรื่อง SQL
 """
+
+# หัวข้อทั้งหมดในคลังความรู้ ใช้บอกขอบเขตที่ตอบได้จากไฟล์ CSV
+TOPIC_INDEX = kb.topic_index()
 
 MAX_HISTORY = 30  # เก็บสูงสุด 30 ข้อความล่าสุด
 
@@ -54,14 +71,57 @@ def save_line_history(user_id, history):
 
 web_chats = {}
 
-def chat_with_groq(history, system=SYSTEM_PROMPT):
-    messages = [{"role": "system", "content": system}] + history[-MAX_HISTORY:]
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,
-        max_tokens=1024,
+def build_reference(user_message):
+    """ดึงหัวข้อจากคลังความรู้ที่ตรงกับคำถามล่าสุด เพื่อแนบไปกับ prompt"""
+    context = kb.build_context(user_message, limit=6)
+    if not context:
+        return (
+            "ข้อมูลอ้างอิง: ไม่พบหัวข้อที่ตรงกับคำถามนี้ในคลังความรู้\n"
+            f"หัวข้อที่มีในคลัง: {TOPIC_INDEX}"
+        )
+    return (
+        "ข้อมูลอ้างอิงจากคลังความรู้ SQL (ใช้เป็นแหล่งข้อมูลหลักในการตอบ):\n\n"
+        f"{context}"
     )
-    return response.choices[0].message.content
+
+
+def trim_history(history):
+    """ตัดเอาเฉพาะข้อความล่าสุด และต้องเริ่มด้วย role user เท่านั้น (ข้อบังคับของ Anthropic API)"""
+    recent = history[-MAX_HISTORY:]
+    while recent and recent[0]["role"] != "user":
+        recent.pop(0)
+    return recent
+
+
+def chat_with_claude(history, system=SYSTEM_PROMPT):
+    recent = trim_history(history)
+    last_user = next(
+        (m["content"] for m in reversed(recent) if m["role"] == "user"), ""
+    )
+    # Haiku ไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
+    full_system = f"{system}\n\n{build_reference(last_user)}"
+
+    if not ANTHROPIC_API_KEY:
+        return "ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
+    try:
+        response = claude.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
+            system=full_system,
+            messages=recent,
+        )
+    except anthropic.AuthenticationError:
+        return "ANTHROPIC_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
+    except anthropic.RateLimitError:
+        return "ตอนนี้มีคำถามเข้ามาเยอะครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ"
+    except anthropic.APIError as exc:
+        print(f"[!] เรียก Claude ไม่สำเร็จ: {type(exc).__name__}: {exc}")
+        if app.debug:  # ตอน dev แสดงสาเหตุจริงในแชตเลย จะได้ไม่ต้องไล่หาใน terminal
+            return f"เรียก Claude ไม่สำเร็จครับ\n\n{type(exc).__name__}: {exc}"
+        return "ขออภัยครับ ตอนนี้เชื่อมต่อ AI ไม่ได้ ลองใหม่อีกครั้งนะครับ"
+
+    return "".join(b.text for b in response.content if b.type == "text")
+
 
 @app.route("/")
 def index():
@@ -85,12 +145,23 @@ def chat_api():
         return jsonify({"error": "no message"}), 400
     session_id = session.get("id")
     if not session_id or session_id not in web_chats:
-        return jsonify({"error": "กรุณาตั้งชื่อก่อนนะคะ"}), 400
+        return jsonify({"error": "กรุณาตั้งชื่อก่อนเริ่มใช้งานครับ"}), 400
     chat = web_chats[session_id]
     chat["history"].append({"role": "user", "content": user_message})
-    reply = chat_with_groq(chat["history"], system=chat["system"])
+    reply = chat_with_claude(chat["history"], system=chat["system"])
     chat["history"].append({"role": "assistant", "content": reply})
     return jsonify({"reply": reply})
+
+def to_line_text(text):
+    """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง"""
+    text = re.sub(r"```[a-zA-Z]*\n?", "", text)
+    text = re.sub(r"^\s*\|[\s|:-]+\|\s*$", "", text, flags=re.M)  # เส้นคั่นตาราง |---|---|
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)               # หัวข้อ ## ###
+    text = re.sub(r"^\s*[-*]{3,}\s*$", "", text, flags=re.M)         # เส้นคั่น ---
+    text = text.replace("`", "").replace("**", "")
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()[:4900]  # ข้อความเดียวของ LINE ยาวได้ไม่เกิน 5000 ตัวอักษร
+
 
 @app.route("/callback", methods=["POST"])
 def callback():
@@ -110,14 +181,14 @@ def handle_message(event):
     user_text = event.message.text
     history = load_line_history(user_id)
     history.append({"role": "user", "content": user_text})
-    reply = chat_with_groq(history)
+    reply = chat_with_claude(history)
     history.append({"role": "assistant", "content": reply})
     save_line_history(user_id, history)
     with ApiClient(configuration) as api_client:
         line_bot_api = MessagingApi(api_client)
         line_bot_api.reply_message(ReplyMessageRequest(
             reply_token=event.reply_token,
-            messages=[TextMessage(text=reply)]
+            messages=[TextMessage(text=to_line_text(reply))]
         ))
 
 if __name__ == "__main__":
