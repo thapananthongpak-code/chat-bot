@@ -49,7 +49,6 @@ SYSTEM_PROMPT = """
 
 กฎเรื่องความถูกต้อง:
 - ยึด "ข้อมูลอ้างอิง" ที่ระบบส่งให้เป็นหลักก่อนเสมอ ถ้ามีเนื้อหาตรงกับคำถาม ให้ตอบตามนั้น
-- ถ้าข้อมูลอ้างอิงไม่ครอบคลุม ให้ตอบจากความรู้ SQL มาตรฐาน และบอกผู้ใช้ตามตรงว่าเป็นข้อมูลนอกคลังความรู้
 - ระบุด้วยว่าไวยากรณ์ต่างกันตามระบบฐานข้อมูลตรงไหน (เช่น LIMIT ใน MySQL vs TOP ใน SQL Server)
 - ห้ามแต่งฟังก์ชันหรือไวยากรณ์ที่ไม่มีอยู่จริง
 
@@ -57,6 +56,30 @@ SYSTEM_PROMPT = """
 - ตอบเฉพาะเรื่อง SQL ฐานข้อมูล การออกแบบตาราง และความปลอดภัยของฐานข้อมูล
 - ถ้าผู้ใช้ถามนอกเรื่อง ให้ปฏิเสธอย่างสุภาพและชวนกลับมาคุยเรื่อง SQL
 """
+
+# โหมดเข้ม: ตอบได้เฉพาะสิ่งที่มีในคลังความรู้เท่านั้น
+STRICT_RULES = """
+กฎเหล็กเรื่องแหล่งข้อมูล (สำคัญที่สุด เหนือกฎอื่นทั้งหมด):
+- ตอบได้เฉพาะจากเนื้อหาใน "ข้อมูลอ้างอิง" ที่ระบบส่งให้เท่านั้น
+- ห้ามใช้ความรู้ SQL ที่คุณมีอยู่เดิมมาเสริม เติม หรือแต่งต่อโดยเด็ดขาด
+- ถ้าข้อมูลอ้างอิงไม่มีเนื้อหาที่ตอบคำถามได้ ให้บอกตรง ๆ ว่า
+  "เรื่องนี้ยังไม่มีอยู่ในคลังความรู้ของผมครับ" แล้วแนะนำหัวข้อใกล้เคียงที่มีในข้อมูลอ้างอิงแทน
+  ห้ามเดา ห้ามตอบจากความรู้ทั่วไป แม้จะมั่นใจว่าถูกก็ตาม
+- เขียนคำสั่ง SQL ให้ตรงโจทย์ได้ แต่ต้องประกอบจากคำสั่งที่ปรากฏในข้อมูลอ้างอิงเท่านั้น
+- ถ้าต้องสมมติชื่อตาราง/คอลัมน์ ให้ใช้ชื่อที่ปรากฏในข้อมูลอ้างอิง และบอกว่าสมมติไว้อย่างไร
+"""
+
+# เปิดโหมดเข้มเป็นค่าเริ่มต้น ปิดได้ด้วย STRICT_KNOWLEDGE=0 ใน .env
+STRICT_KNOWLEDGE = os.getenv("STRICT_KNOWLEDGE", "1").strip().lower() not in ("0", "false", "no")
+if STRICT_KNOWLEDGE:
+    SYSTEM_PROMPT += STRICT_RULES
+
+OUT_OF_SCOPE_REPLY = (
+    "เรื่องนี้ยังไม่มีอยู่ในคลังความรู้ของผมครับ ผมตอบได้เฉพาะเนื้อหาที่อยู่ในคลังเท่านั้น\n\n"
+    "ลองถามหัวข้อเหล่านี้ดูได้ครับ เช่น SELECT, WHERE, ORDER BY, JOIN แบบต่าง ๆ, "
+    "GROUP BY, HAVING, ฟังก์ชัน COUNT/SUM/AVG, การสร้างตาราง, PRIMARY KEY, "
+    "FOREIGN KEY หรือการป้องกัน SQL Injection"
+)
 
 # หัวข้อทั้งหมดในคลังความรู้ ใช้บอกขอบเขตที่ตอบได้จากไฟล์ CSV
 TOPIC_INDEX = kb.topic_index()
@@ -80,17 +103,23 @@ def save_line_history(user_id, history):
     except OSError as exc:
         print(f"[!] บันทึกประวัติ LINE ไม่ได้: {exc}")
 
-def build_reference(user_message):
-    """ดึงหัวข้อจากคลังความรู้ที่ตรงกับคำถามล่าสุด เพื่อแนบไปกับ prompt"""
-    context = kb.build_context(user_message, limit=6)
-    if not context:
+def search_query(recent):
+    """รวมคำถามล่าสุดกับคำถามก่อนหน้า เพื่อให้คำถามต่อเนื่องสั้น ๆ
+    เช่น "แล้วแบบไม่ซ้ำล่ะ" ยังค้นหาหัวข้อที่เกี่ยวข้องเจอ"""
+    users = [m["content"] for m in recent if m["role"] == "user"]
+    return " ".join(users[-2:])
+
+
+def build_reference(entries):
+    """จัดรูปหัวข้อที่ค้นเจอ เพื่อแนบไปกับ prompt"""
+    if not entries:
         return (
             "ข้อมูลอ้างอิง: ไม่พบหัวข้อที่ตรงกับคำถามนี้ในคลังความรู้\n"
             f"หัวข้อที่มีในคลัง: {TOPIC_INDEX}"
         )
     return (
         "ข้อมูลอ้างอิงจากคลังความรู้ SQL (ใช้เป็นแหล่งข้อมูลหลักในการตอบ):\n\n"
-        f"{context}"
+        f"{kb.format_entries(entries)}"
     )
 
 
@@ -104,11 +133,15 @@ def trim_history(history):
 
 def chat_with_claude(history, system=SYSTEM_PROMPT):
     recent = trim_history(history)
-    last_user = next(
-        (m["content"] for m in reversed(recent) if m["role"] == "user"), ""
-    )
+    entries = kb.search(search_query(recent), limit=6)
+
+    # โหมดเข้ม: ค้นไม่เจอเลยก็ตอบปฏิเสธไปตรง ๆ ไม่ต้องเรียก API
+    # การันตีว่าคำตอบไม่หลุดออกนอกคลังความรู้ และประหยัดค่าใช้จ่ายไปด้วย
+    if STRICT_KNOWLEDGE and not entries:
+        return OUT_OF_SCOPE_REPLY
+
     # Haiku ไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
-    full_system = f"{system}\n\n{build_reference(last_user)}"
+    full_system = f"{system}\n\n{build_reference(entries)}"
 
     if not ANTHROPIC_API_KEY:
         return "ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
