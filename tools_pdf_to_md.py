@@ -1,12 +1,11 @@
-"""แปลงคู่มือ SQL รูปแบบ PDF ให้เป็นไฟล์ CSV สำหรับคลังความรู้ของบอท
+"""แปลงคู่มือ SQL รูปแบบ PDF ให้เป็นไฟล์ Markdown สำหรับคลังความรู้ของบอท
 
-วิธีใช้:  ./venv/bin/python tools_pdf_to_csv.py <ไฟล์.pdf> <ผลลัพธ์.csv>
+วิธีใช้:  ./venv/bin/python tools_pdf_to_md.py <ไฟล์.pdf> <ผลลัพธ์.md>
 ต้องติดตั้ง pypdf ก่อน:  ./venv/bin/pip install pypdf
 
 รองรับ PDF ที่จัดหัวข้อเป็นเลขลำดับ เช่น "3. คำสั่ง SELECT" และมีหัวข้อย่อย
 "รูปแบบคำสั่ง" กับ "ตัวอย่าง" ซึ่งจะถูกแยกเป็นคอลัมน์ Syntax และ Example
 """
-import csv
 import re
 import sys
 
@@ -97,20 +96,32 @@ def parse(topic, body):
     return topic, text, syntax.strip(), "\n\n".join(examples[:4]).strip()
 
 
+def to_markdown(rows):
+    out = ["# คลังความรู้ SQL ภาษาไทย", "",
+           "แต่ละหัวข้อขึ้นต้นด้วย `## ` ตามด้วยคำอธิบาย",
+           "แล้วใส่ `### รูปแบบคำสั่ง` และ `### ตัวอย่าง` เป็นบล็อกโค้ด ```sql", ""]
+    for topic, desc, syntax, example in rows:
+        out += ["---", "", f"## {topic}", ""]
+        if desc:
+            # ขึ้นย่อหน้าใหม่ตรงหัวข้อย่อยของเนื้อหา เช่น "COUNT(*) — นับทุกแถว"
+            out += [re.sub(r"\s+(?=[A-Z][A-Za-z_()*\s]{2,30}—)", "\n\n", desc), ""]
+        if syntax:
+            out += ["### รูปแบบคำสั่ง", "", "```sql", syntax, "```", ""]
+        if example:
+            out += ["### ตัวอย่าง", "", "```sql", example, "```", ""]
+    return "\n".join(out).rstrip() + "\n"
+
+
 def main():
     if len(sys.argv) != 3:
         print(__doc__)
         sys.exit(1)
-    pdf_path, csv_path = sys.argv[1], sys.argv[2]
+    pdf_path, md_path = sys.argv[1], sys.argv[2]
     rows = [parse(t, b) for t, b in sections(read_lines(pdf_path))]
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["หัวข้อ (Topic)", "คำอธิบาย (Description)",
-                         "คำสั่ง SQL (Syntax)", "ตัวอย่าง (Example)"])
-        for topic, desc, syntax, example in rows:
-            writer.writerow([topic, desc or "-", syntax or "-", example or "-"])
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(to_markdown(rows))
     avg = sum(len(d) for _, d, _, _ in rows) / max(len(rows), 1)
-    print(f"เขียน {csv_path} แล้ว {len(rows)} หัวข้อ (คำอธิบายเฉลี่ย {avg:.0f} ตัวอักษร)")
+    print(f"เขียน {md_path} แล้ว {len(rows)} หัวข้อ (คำอธิบายเฉลี่ย {avg:.0f} ตัวอักษร)")
 
 
 if __name__ == "__main__":

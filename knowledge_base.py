@@ -83,13 +83,61 @@ def _load_file(path):
     return entries
 
 
+_MD_FENCE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.S)
+
+
+def _md_code(text):
+    """ดึงเนื้อในบล็อกโค้ด ```...``` ถ้าไม่มีก็ใช้ข้อความดิบ"""
+    m = _MD_FENCE.search(text)
+    return (m.group(1) if m else text).strip()
+
+
+def _md_prose(text):
+    """ตัดเส้นคั่นแนวนอน (--- หรือ ***) ทิ้ง ไม่งั้นเส้นคั่นของหัวข้อถัดไป
+    จะถูกดูดมาอยู่ท้ายคำอธิบายของหัวข้อก่อนหน้า"""
+    text = re.sub(r"^[ \t]*(-{3,}|\*{3,}|_{3,})[ \t]*$", "", text, flags=re.M)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _load_md(path):
+    """อ่านไฟล์ Markdown ตามข้อตกลง:
+    `## หัวข้อ` = 1 หัวข้อ, ข้อความถัดมา = คำอธิบาย,
+    `### รูปแบบคำสั่ง` = Syntax, `### ตัวอย่าง` = Example"""
+    raw = open(path, encoding="utf-8").read()
+    parts = re.split(r"^##[ \t]+(?!#)(.+?)[ \t]*$", raw, flags=re.M)
+    entries = []
+    for i in range(1, len(parts) - 1, 2):
+        topic = _clean(parts[i])
+        if not topic:
+            continue
+        segs = re.split(r"^###[ \t]+(.+?)[ \t]*$", parts[i + 1], flags=re.M)
+        named = {segs[j].strip().lower(): segs[j + 1] for j in range(1, len(segs) - 1, 2)}
+        syntax = example = ""
+        for key, body in named.items():
+            if "รูปแบบ" in key or "syntax" in key:
+                syntax = syntax or _md_code(body)
+            elif "ตัวอย่าง" in key or "example" in key:
+                example = example or _md_code(body)
+        entries.append({
+            "topic": topic,
+            "description": _clean(_md_prose(segs[0])),
+            "syntax": _clean(syntax),
+            "example": _clean(example),
+            "source": os.path.basename(path),
+        })
+    return entries
+
+
 def load_entries():
     entries = []
     if not os.path.isdir(KNOWLEDGE_DIR):
         return entries
     for filename in sorted(os.listdir(KNOWLEDGE_DIR)):
-        if filename.lower().endswith(".csv"):
+        lower = filename.lower()
+        if lower.endswith(".csv"):
             entries.extend(_load_file(os.path.join(KNOWLEDGE_DIR, filename)))
+        elif lower.endswith(".md"):
+            entries.extend(_load_md(os.path.join(KNOWLEDGE_DIR, filename)))
     for entry in entries:
         entry["_haystack"] = " ".join([
             entry["topic"], entry["description"], entry["syntax"], entry["example"]

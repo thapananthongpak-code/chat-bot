@@ -38,8 +38,8 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 |---|---|
 | `app.py` | เซิร์ฟเวอร์ Flask, system prompt, เชื่อม Claude API และ LINE webhook |
 | `knowledge_base.py` | โหลด CSV และค้นหาหัวข้อที่ตรงกับคำถาม เพื่อแนบไปกับ prompt |
-| `knowledge/*.csv` | คลังความรู้ SQL (หัวข้อ / คำอธิบาย / รูปแบบคำสั่ง / ตัวอย่าง) |
-| `tools_pdf_to_csv.py` | เครื่องมือแปลงคู่มือ PDF เป็น CSV |
+| `knowledge/*.md` | คลังความรู้ SQL (รองรับ `.csv` ด้วย) |
+| `tools_pdf_to_md.py` | เครื่องมือแปลงคู่มือ PDF เป็น Markdown |
 | `templates/index.html` | หน้าเว็บแชต พร้อมไฮไลต์โค้ด SQL |
 | `data/` | ประวัติแชตเป็นไฟล์ JSON — `web_<chat_id>.json` และ `line_<user_id>.json` (ไม่ขึ้น git) |
 
@@ -53,8 +53,32 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 
 ## เพิ่มความรู้ให้บอท
 
-วางไฟล์ `.csv` เพิ่มใน `knowledge/` โดยใช้ 4 คอลัมน์เดิม (หัวข้อ, คำอธิบาย, คำสั่ง SQL, ตัวอย่าง)
-ช่องที่ไม่มีข้อมูลใส่ `-` ได้ แล้วรันเซิร์ฟเวอร์ใหม่ ระบบจะโหลดให้อัตโนมัติ
+วางไฟล์ `.md` เพิ่มใน `knowledge/` ได้เลย ระบบโหลดทุกไฟล์ในโฟลเดอร์นั้นอัตโนมัติ
+(รองรับ `.csv` แบบ 4 คอลัมน์ด้วย เผื่อใครถนัดทำข้อมูลใน Excel)
+
+### รูปแบบไฟล์ Markdown
+
+```markdown
+## ฟังก์ชัน COUNT()
+
+ฟังก์ชัน COUNT() ใช้นับจำนวนแถวที่ตรงตามเงื่อนไขที่กำหนด
+
+### รูปแบบคำสั่ง
+​```sql
+SELECT COUNT(column_name) FROM table_name WHERE condition;
+​```
+
+### ตัวอย่าง
+​```sql
+SELECT COUNT(*) FROM Products;
+​```
+```
+
+`## หัวข้อ` = 1 หัวข้อ · ข้อความถัดมา = คำอธิบาย ·
+`### รูปแบบคำสั่ง` = Syntax · `### ตัวอย่าง` = Example
+หัวข้อไหนไม่มี Syntax หรือตัวอย่าง ก็ไม่ต้องใส่ส่วนนั้น
+
+### ข้อควรรู้ 2 ข้อ
 
 **ตั้งชื่อหัวข้อให้มีคำศัพท์อังกฤษเสมอ** เช่น `ฟังก์ชัน COUNT()` เพราะตัวค้นหาให้น้ำหนัก
 คำอังกฤษที่ตรงกับหัวข้อสูงที่สุด ถ้าหัวข้อเป็นภาษาไทยล้วนผู้ใช้จะค้นหาไม่เจอ
@@ -66,7 +90,7 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 
 ```bash
 ./venv/bin/pip install pypdf
-./venv/bin/python tools_pdf_to_csv.py คู่มือ.pdf knowledge/ชื่อไฟล์.csv
+./venv/bin/python tools_pdf_to_md.py คู่มือ.pdf knowledge/ชื่อไฟล์.md
 ```
 
 รองรับ PDF ที่จัดหัวข้อเป็นเลขลำดับ (เช่น `3. คำสั่ง SELECT`) และมีหัวข้อย่อย
