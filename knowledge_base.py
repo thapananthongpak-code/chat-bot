@@ -21,6 +21,44 @@ _TH_NOISE = [
 ]
 
 
+# คนไทยถามด้วยคำธรรมดา แต่หัวข้อในไฟล์เป็นศัพท์อังกฤษ ตารางนี้เชื่อมสองฝั่งเข้าหากัน
+# ระบบให้คะแนนคำอังกฤษที่ตรงกับหัวข้อสูงสุด การเติมคำอังกฤษให้จึงช่วยการค้นหาได้มาก
+_ALIASES = {
+    "sum": ("ผลรวม", "ยอดรวม", "รวมยอด", "บวกกัน", "รวมทั้งหมด", "ซื้อรวม", "ขายรวม"),
+    "group by": ("จัดกลุ่ม", "แต่ละกลุ่ม", "แยกตาม", "จัดหมวด", "ต่อกลุ่ม"),
+    "having": ("กรองหลังจัดกลุ่ม", "กลุ่มที่มากกว่า", "กลุ่มที่เกิน"),
+    "count": ("นับจำนวน", "มีกี่", "จำนวนแถว", "นับ"),
+    "avg": ("ค่าเฉลี่ย", "เฉลี่ย"),
+    "max": ("มากสุด", "สูงสุด"),
+    "min": ("น้อยสุด", "ต่ำสุด"),
+    "order by": ("เรียงลำดับ", "จัดเรียง", "เรียงจาก", "มากไปน้อย", "น้อยไปมาก"),
+    "where": ("กรองข้อมูล", "เฉพาะที่", "เงื่อนไข"),
+    "join": ("เชื่อมตาราง", "รวมตาราง", "ต่อตาราง", "สองตาราง", "หลายตาราง", "ตารางมาต่อ"),
+    "distinct": ("ไม่ซ้ำ", "ไม่ให้ซ้ำ", "ซ้ำกัน"),
+    "like": ("ค้นหาคำ", "ขึ้นต้นด้วย", "ลงท้ายด้วย", "มีคำว่า"),
+    "between": ("อยู่ระหว่าง", "ช่วงตั้งแต่", "ตั้งแต่ถึง"),
+    "insert": ("เพิ่มข้อมูล", "บันทึกข้อมูล", "ใส่ข้อมูล"),
+    "update": ("แก้ไขข้อมูล", "อัปเดต", "เปลี่ยนข้อมูล"),
+    "delete": ("ลบข้อมูล", "ลบแถว", "เอาข้อมูลออก"),
+    "limit": ("จำกัดจำนวน", "เอาแค่", "กี่อันแรก"),
+    "primary key": ("คีย์หลัก", "รหัสประจำ"),
+    "foreign key": ("คีย์นอก", "เชื่อมความสัมพันธ์"),
+    "index": ("ทำให้เร็วขึ้น", "ค้นหาเร็ว", "ดัชนี"),
+    "sql injection": ("แฮก", "โจมตี", "เจาะระบบ", "ความปลอดภัย", "ป้องกันการโจมตี"),
+    "view": ("ตารางเสมือน", "มุมมอง"),
+    "null": ("ค่าว่าง", "ไม่มีค่า"),
+}
+
+
+def _alias_words(text):
+    """หาคำอังกฤษที่ควรใช้ค้นหาเพิ่ม จากคำไทยที่ผู้ใช้พิมพ์"""
+    found = set()
+    for english, thai_terms in _ALIASES.items():
+        if any(t in text for t in thai_terms):
+            found.update(english.split())
+    return found
+
+
 def _clean(value):
     value = (value or "").strip()
     return "" if value in _EMPTY else value
@@ -109,12 +147,18 @@ def search(query, limit=6, min_score=1.0):
         return []
     lowered = query.lower()
     words = {w for w in _WORD_RE.findall(lowered) if len(w) > 1 and w not in _STOPWORDS}
+    words |= _alias_words(lowered)
     grams = _thai_ngrams(lowered)
     is_definition = any(k in lowered for k in ("คืออะไร", "หมายถึง", "what is"))
     scored = [(_score(e, words, grams, is_definition), e) for e in ENTRIES]
-    scored = [(s, e) for s, e in scored if s >= min_score]
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [e for _, e in scored[:limit]]
+    ranked = sorted([p for p in scored if p[0] > 0], key=lambda p: p[0], reverse=True)
+
+    strong = [e for s, e in ranked if s >= min_score]
+    if strong:
+        return strong[:limit]
+    # ไม่มีหัวข้อไหนถึงเกณฑ์ แต่ยังพอมีที่เกี่ยวข้องบ้าง — ส่งอันที่ใกล้ที่สุดให้โมเดลตัดสินเอง
+    # กันคำถาม SQL จริง ๆ ที่ใช้คำไม่ตรงกับในไฟล์ โดนปฏิเสธทั้งที่ตอบได้
+    return [e for _, e in ranked[:3]]
 
 
 # บอกให้ชัดว่าช่องไหนไม่มีข้อมูล ไม่งั้นโมเดลจะเข้าใจว่าไม่ได้ส่งมาแล้วแต่งเติมเอง
