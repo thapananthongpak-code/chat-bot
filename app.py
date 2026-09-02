@@ -6,6 +6,7 @@ from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMe
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
 import os, json, re
+from datetime import datetime, timezone
 
 import knowledge_base as kb
 
@@ -67,6 +68,15 @@ STRICT_RULES = """
   ห้ามเดา ห้ามตอบจากความรู้ทั่วไป แม้จะมั่นใจว่าถูกก็ตาม
 - เขียนคำสั่ง SQL ให้ตรงโจทย์ได้ แต่ต้องประกอบจากคำสั่งที่ปรากฏในข้อมูลอ้างอิงเท่านั้น
 - ถ้าต้องสมมติชื่อตาราง/คอลัมน์ ให้ใช้ชื่อที่ปรากฏในข้อมูลอ้างอิง และบอกว่าสมมติไว้อย่างไร
+
+กฎการยกตัวอย่างและการขยายความ (ห้ามละเมิด):
+- ยกได้เฉพาะตัวอย่างที่ปรากฏในช่อง "ตัวอย่าง" หรือ "รูปแบบคำสั่ง" ของข้อมูลอ้างอิงเท่านั้น
+- ห้ามคิดตัวอย่างเพิ่มเองเด็ดขาด แม้จะถูกต้องตามหลัก SQL ก็ตาม
+- ถ้าช่องใดเขียนว่าไม่มีข้อมูลในคลังความรู้ ให้ข้ามส่วนนั้นไปเลย ห้ามเติมให้
+  เช่น ถ้าไม่มีตัวอย่าง ก็ไม่ต้องมีหัวข้อ "ตัวอย่าง" ในคำตอบ
+- ห้ามเพิ่มหัวข้อ "ข้อควรระวัง" "ทริก" หรือคำอธิบายผลลัพธ์ ถ้าเนื้อหานั้นไม่ได้อยู่ในข้อมูลอ้างอิง
+- เรียบเรียงถ้อยคำให้อ่านง่ายได้ แต่ห้ามเพิ่มข้อเท็จจริงใหม่ที่ไม่มีในข้อมูลอ้างอิง
+- ตอบสั้นกระชับตามปริมาณข้อมูลที่มีจริง ไม่ต้องพยายามเขียนให้ยาว
 """
 
 # เปิดโหมดเข้มเป็นค่าเริ่มต้น ปิดได้ด้วย STRICT_KNOWLEDGE=0 ใน .env
@@ -86,6 +96,72 @@ TOPIC_INDEX = kb.topic_index()
 
 MAX_HISTORY = 30  # เก็บสูงสุด 30 ข้อความล่าสุด
 
+CHAT_ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
+
+
+def chat_path(chat_id):
+    """สร้าง path ของไฟล์ประวัติ — ตรวจรูปแบบ id ก่อนเสมอ กัน path traversal
+    (เช่น chat_id = '../../etc/passwd' จะเขียนทับไฟล์นอกโฟลเดอร์ได้)"""
+    if not chat_id or not CHAT_ID_RE.match(chat_id):
+        return None
+    return os.path.join(DATA_DIR, f"web_{chat_id}.json")
+
+
+def load_web_chat(chat_id):
+    path = chat_path(chat_id)
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def save_web_chat(chat_id, name, history):
+    path = chat_path(chat_id)
+    if not path:
+        return False
+    title = next((m["content"] for m in history if m["role"] == "user"), "แชทใหม่")
+    payload = {
+        "id": chat_id,
+        "name": name,
+        "title": title[:60],
+        "updated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "history": history[-MAX_HISTORY:],
+    }
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError as exc:
+        print(f"[!] บันทึกประวัติแชทเว็บไม่ได้: {exc}")
+        return False
+
+
+def list_web_chats():
+    """รายการแชทที่บันทึกไว้ เรียงจากคุยล่าสุดก่อน"""
+    items = []
+    try:
+        names = os.listdir(DATA_DIR)
+    except OSError:
+        return items
+    for filename in names:
+        if not (filename.startswith("web_") and filename.endswith(".json")):
+            continue
+        data = load_web_chat(filename[4:-5])
+        if data:
+            items.append({
+                "id": data.get("id"),
+                "title": data.get("title") or "แชทใหม่",
+                "updated": data.get("updated") or "",
+                "count": len(data.get("history") or []),
+            })
+    items.sort(key=lambda c: c["updated"], reverse=True)
+    return items
+
+
 def load_line_history(user_id):
     path = os.path.join(DATA_DIR, f"line_{user_id}.json")
     try:
@@ -102,6 +178,15 @@ def save_line_history(user_id, history):
             json.dump(history[-MAX_HISTORY:], f, ensure_ascii=False, indent=2)
     except OSError as exc:
         print(f"[!] บันทึกประวัติ LINE ไม่ได้: {exc}")
+
+def clean_history(raw):
+    """กรองประวัติที่รับมาจากเบราว์เซอร์ ให้เหลือเฉพาะรูปแบบที่ API ยอมรับ"""
+    return [
+        {"role": m.get("role"), "content": str(m.get("content") or "")[:8000]}
+        for m in (raw or [])[-MAX_HISTORY:]
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
+    ]
+
 
 def search_query(recent):
     """รวมคำถามล่าสุดกับคำถามก่อนหน้า เพื่อให้คำถามต่อเนื่องสั้น ๆ
@@ -171,26 +256,60 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat_api():
-    """แชตหน้าเว็บเป็นแบบ stateless — เบราว์เซอร์ถือประวัติแล้วส่งมาให้ทุกครั้ง
-    เพราะบน serverless แต่ละคำขออาจตกไปคนละ instance ตัวแปรในหน่วยความจำจึงใช้ไม่ได้"""
+    """เก็บประวัติเป็นไฟล์ JSON ใน data/ ถ้าส่ง chat_id มา
+    ถ้าเขียนไฟล์ไม่ได้ (เช่นบน Vercel) จะถอยไปใช้ประวัติที่เบราว์เซอร์ส่งมาแทน"""
     payload = request.get_json(silent=True) or {}
     user_message = (payload.get("message") or "").strip()
     if not user_message:
         return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
 
-    history = [
-        {"role": m.get("role"), "content": str(m.get("content") or "")[:8000]}
-        for m in (payload.get("history") or [])[-MAX_HISTORY:]
-        if m.get("role") in ("user", "assistant") and m.get("content")
-    ]
-    history.append({"role": "user", "content": user_message})
+    chat_id = (payload.get("chat_id") or "").strip()
+    name = (payload.get("name") or "").strip()[:30]
+
+    saved = load_web_chat(chat_id)
+    if saved:
+        history = saved.get("history") or []
+        name = name or saved.get("name") or ""
+    else:
+        history = clean_history(payload.get("history"))
+
+    history = history + [{"role": "user", "content": user_message}]
 
     system = SYSTEM_PROMPT
-    name = (payload.get("name") or "").strip()[:30]
     if name:
         system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
 
-    return jsonify({"reply": chat_with_claude(history, system=system)})
+    reply = chat_with_claude(history, system=system)
+    history.append({"role": "assistant", "content": reply})
+    stored = save_web_chat(chat_id, name, history)
+
+    return jsonify({"reply": reply, "chat_id": chat_id, "stored": stored})
+
+
+@app.route("/chats", methods=["GET"])
+def chats_list():
+    return jsonify({"chats": list_web_chats()})
+
+
+@app.route("/chats/<chat_id>", methods=["GET"])
+def chat_get(chat_id):
+    data = load_web_chat(chat_id)
+    if not data:
+        return jsonify({"error": "ไม่พบแชทนี้"}), 404
+    return jsonify(data)
+
+
+@app.route("/chats/<chat_id>", methods=["DELETE"])
+def chat_delete(chat_id):
+    path = chat_path(chat_id)
+    if not path:
+        return jsonify({"error": "รหัสแชทไม่ถูกต้อง"}), 400
+    try:
+        os.remove(path)
+    except OSError:
+        pass  # ไม่มีไฟล์อยู่แล้วก็ถือว่าลบสำเร็จ
+    return jsonify({"ok": True})
+
 
 def to_line_text(text):
     """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง"""

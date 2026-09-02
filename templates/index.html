@@ -224,6 +224,51 @@
     .chat-input textarea { resize: none; max-height: 130px; line-height: 1.5; overflow-y: auto; }
     .chat-input .btn-primary { padding: 0 20px; height: 46px; flex-shrink: 0; }
 
+    /* ---------- ลิ้นชักรายการแชท ---------- */
+    .drawer {
+      position: absolute; inset: 0 auto 0 0; width: min(300px, 85%); z-index: 20;
+      background: var(--bg-1); border-right: 1px solid var(--line);
+      display: flex; flex-direction: column;
+      transform: translateX(-102%); transition: transform .32s var(--ease);
+      box-shadow: 12px 0 40px rgba(0,0,0,.45);
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head { padding: 14px 15px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .drawer-head h3 { font-size: 14.5px; }
+    .drawer-list { flex: 1; overflow-y: auto; padding: 9px; display: flex; flex-direction: column; gap: 6px; }
+    .drawer-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 26px 12px; line-height: 1.7; }
+    .chat-item {
+      display: flex; align-items: center; gap: 8px; padding: 10px 11px;
+      background: var(--bg-2); border: 1px solid transparent; border-radius: 10px;
+      cursor: pointer; transition: border-color .2s, transform .18s var(--ease);
+      animation: chipIn .35s var(--ease) both;
+    }
+    .chat-item:hover { border-color: var(--accent); transform: translateX(3px); }
+    .chat-item.active { border-color: var(--accent); background: rgba(56,189,248,.1); }
+    .chat-item .info { flex: 1; min-width: 0; }
+    .chat-item .t { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-item .m { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .chat-item .del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; padding: 4px 6px; border-radius: 6px; flex-shrink: 0; transition: color .2s, background .2s; }
+    .chat-item .del:hover { color: #f87171; background: rgba(248,113,113,.12); }
+    .scrim {
+      position: absolute; inset: 0; z-index: 15; background: rgba(5,10,20,.6);
+      opacity: 0; visibility: hidden; transition: opacity .3s, visibility .3s;
+    }
+    .scrim.show { opacity: 1; visibility: visible; }
+
+    /* ---------- ข้อความแจ้งเตือนชั่วคราว ---------- */
+    .toast {
+      position: absolute; left: 50%; bottom: 96px; z-index: 30;
+      transform: translate(-50%, 14px); opacity: 0; visibility: hidden;
+      background: var(--bg-2); border: 1px solid var(--accent); color: var(--text);
+      padding: 9px 17px; border-radius: 999px; font-size: 13px; white-space: nowrap;
+      box-shadow: 0 8px 26px rgba(0,0,0,.45);
+      transition: opacity .25s, transform .25s var(--ease), visibility .25s;
+    }
+    .toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+
+    .head-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
     /* ---------- ปุ่มเลื่อนลงล่างสุด ---------- */
     .to-bottom {
       position: absolute; right: 16px; bottom: 132px; z-index: 5;
@@ -256,6 +301,8 @@
       .chat-input { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
       .chat-input .btn-primary { padding: 0 16px; }
       .to-bottom { bottom: 124px; right: 12px; }
+      .icon-btn { width: 36px; height: 36px; font-size: 15px; }
+      .head-actions { gap: 4px; }
       .aurora { opacity: .35; }
     }
 
@@ -293,10 +340,24 @@
         <div class="name" id="botChatName">ครูเอสคิว</div>
         <div class="status"><span class="dot"></span> ผู้เชี่ยวชาญ SQL &amp; ฐานข้อมูล</div>
       </div>
-      <button class="icon-btn" onclick="newChat()" title="เริ่มบทสนทนาใหม่" aria-label="เริ่มบทสนทนาใหม่">↺</button>
+      <div class="head-actions">
+        <button class="icon-btn" onclick="toggleDrawer()" title="รายการแชท" aria-label="รายการแชท">☰</button>
+        <button class="icon-btn" onclick="refreshChat()" title="รีเฟรชแชท" aria-label="รีเฟรชแชท">↻</button>
+        <button class="icon-btn" onclick="newChat()" title="สร้างแชทใหม่" aria-label="สร้างแชทใหม่">+</button>
+      </div>
     </div>
 
+    <div class="scrim" id="scrim" onclick="toggleDrawer()"></div>
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head">
+        <h3>รายการแชท</h3>
+        <button class="icon-btn" onclick="toggleDrawer()" aria-label="ปิด">✕</button>
+      </div>
+      <div class="drawer-list" id="drawerList"></div>
+    </aside>
+
     <div class="chat-messages" id="messages"></div>
+    <div class="toast" id="toast"></div>
     <button class="to-bottom" id="toBottom" onclick="scrollToBottom()" aria-label="เลื่อนลงล่างสุด">↓</button>
 
     <div class="chips">
@@ -320,10 +381,15 @@
     const toBottom = document.getElementById("toBottom");
     const STORE_KEY = "chsql.session";
 
-    // เบราว์เซอร์ถือประวัติบทสนทนาเอง เพราะฝั่งเซิร์ฟเวอร์เป็น stateless (รันบน serverless ได้)
+    // ประวัติเก็บเป็นไฟล์ JSON ฝั่งเซิร์ฟเวอร์ (data/web_<chat_id>.json)
+    // แต่ยังส่ง history ไปด้วยเป็นตัวสำรอง เผื่อเซิร์ฟเวอร์เขียนไฟล์ไม่ได้ (เช่นบน Vercel)
     let history = [];
     let userName = "";
+    let chatId = "";
     let busy = false;
+
+    const newId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)))
+      .map(b => b.toString(16).padStart(2, "0")).join("");
 
     // เรียงคำยาวไว้ก่อนคำสั้น เพื่อให้ regex จับ "INSERT INTO" ก่อน "INTO"
     const SQL_KEYWORDS = ["INSERT INTO","CREATE DATABASE","CREATE TABLE","CREATE VIEW","CREATE INDEX","DROP DATABASE","DROP TABLE","ALTER TABLE","BACKUP DATABASE","FULL OUTER JOIN","LEFT JOIN","RIGHT JOIN","INNER JOIN","OUTER JOIN","GROUP BY","ORDER BY","PRIMARY KEY","FOREIGN KEY","AUTO_INCREMENT","IS NOT NULL","IS NULL","NOT NULL","UNION ALL","SELECT","DISTINCT","VALUES","UPDATE","DELETE","REFERENCES","HAVING","BETWEEN","EXISTS","DEFAULT","UNIQUE","COALESCE","IFNULL","COUNT","UNION","WHERE","LIMIT","CHECK","INDEX","FROM","JOIN","LIKE","CASE","WHEN","THEN","ELSE","DESC","NULL","INTO","TOP","SET","AND","NOT","AVG","SUM","MIN","MAX","ASC","END","ON","AS","OR","IN"];
@@ -451,30 +517,103 @@
       toBottom.classList.toggle("show", far);
     });
 
-    /* ---------- จำบทสนทนาไว้ กันเผลอรีเฟรชแล้วหาย ---------- */
-    function saveSession() {
-      try {
-        localStorage.setItem(STORE_KEY, JSON.stringify({ name: userName, history }));
-      } catch (e) { /* โหมดส่วนตัวหรือปิด storage ไว้ — ข้ามไป ไม่ใช่เรื่องคอขาดบาดตาย */ }
+    /* ---------- แจ้งเตือนสั้น ๆ ---------- */
+    let toastTimer;
+    function toast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
     }
 
-    function loadSession() {
+    /* ---------- จำชื่อกับแชทล่าสุดไว้ในเบราว์เซอร์ ---------- */
+    function remember() {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify({ name: userName, chatId })); } catch (e) {}
+    }
+    function recall() {
+      try { return JSON.parse(localStorage.getItem(STORE_KEY) || "null") || {}; } catch (e) { return {}; }
+    }
+
+    /* ---------- ลิ้นชักรายการแชท ---------- */
+    function toggleDrawer(force) {
+      const open = force !== undefined ? force : !document.getElementById("drawer").classList.contains("open");
+      document.getElementById("drawer").classList.toggle("open", open);
+      document.getElementById("scrim").classList.toggle("show", open);
+      if (open) loadChatList();
+    }
+
+    function timeAgo(iso) {
+      const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+      if (!iso || isNaN(diff)) return "";
+      if (diff < 60) return "เมื่อครู่";
+      if (diff < 3600) return Math.floor(diff / 60) + " นาทีที่แล้ว";
+      if (diff < 86400) return Math.floor(diff / 3600) + " ชั่วโมงที่แล้ว";
+      return Math.floor(diff / 86400) + " วันที่แล้ว";
+    }
+
+    async function loadChatList() {
+      const box = document.getElementById("drawerList");
+      let chats = [];
+      try { chats = (await (await fetch("/chats")).json()).chats || []; } catch (e) {}
+      if (!chats.length) {
+        box.innerHTML = '<div class="drawer-empty">ยังไม่มีแชทที่บันทึกไว้<br>เริ่มถามคำถามได้เลยครับ</div>';
+        return;
+      }
+      box.innerHTML = "";
+      chats.forEach(c => {
+        const row = document.createElement("div");
+        row.className = "chat-item" + (c.id === chatId ? " active" : "");
+        row.innerHTML = '<div class="info"><div class="t"></div><div class="m"></div></div>' +
+                        '<button class="del" title="ลบแชทนี้">🗑</button>';
+        row.querySelector(".t").textContent = c.title;          // textContent กัน XSS จากหัวข้อแชท
+        row.querySelector(".m").textContent = `${c.count} ข้อความ · ${timeAgo(c.updated)}`;
+        row.querySelector(".info").onclick = () => openChat(c.id);
+        row.querySelector(".del").onclick = e => { e.stopPropagation(); deleteChat(c.id); };
+        box.appendChild(row);
+      });
+    }
+
+    async function openChat(id) {
       try {
-        const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
-        if (!saved || !saved.name || !Array.isArray(saved.history) || !saved.history.length) return false;
-        userName = saved.name;
-        history = saved.history;
-        document.getElementById("nameModal").style.display = "none";
+        const res = await fetch("/chats/" + id);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        chatId = data.id;
+        userName = data.name || userName;
+        history = data.history || [];
+        messages.innerHTML = "";
         history.forEach(m => addMessage(m.content, m.role === "user" ? "user" : "bot"));
-        return true;
-      } catch (e) { return false; }
+        remember();
+        toggleDrawer(false);
+      } catch (e) { toast("เปิดแชทไม่สำเร็จ"); }
     }
 
-    function newChat() {
+    async function deleteChat(id) {
+      try { await fetch("/chats/" + id, { method: "DELETE" }); } catch (e) {}
+      if (id === chatId) newChat(true);
+      loadChatList();
+      toast("ลบแชทแล้ว");
+    }
+
+    function newChat(quiet) {
+      chatId = newId();
       history = [];
       messages.innerHTML = "";
-      try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+      remember();
       greet();
+      if (!quiet) toast("เริ่มแชทใหม่แล้ว");
+      toggleDrawer(false);
+    }
+
+    async function refreshChat() {
+      if (!chatId) return;
+      const res = await fetch("/chats/" + chatId).catch(() => null);
+      if (res && res.ok) { await openChat(chatId); toast("รีเฟรชแล้ว"); return; }
+      // ยังไม่มีไฟล์บนเซิร์ฟเวอร์ (เช่นบน Vercel) — วาดจากประวัติในเบราว์เซอร์แทน
+      messages.innerHTML = "";
+      history.length ? history.forEach(m => addMessage(m.content, m.role === "user" ? "user" : "bot")) : greet();
+      toast("รีเฟรชแล้ว");
     }
 
     function greet() {
@@ -500,6 +639,8 @@
       if (!name) return;
       userName = name;
       history = [];
+      chatId = newId();
+      remember();
       const modal = document.getElementById("nameModal");
       modal.classList.add("hide");
       setTimeout(() => { modal.style.display = "none"; }, 300);
@@ -534,7 +675,7 @@
         const res = await fetch("/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, history, name: userName })
+          body: JSON.stringify({ message: text, history, name: userName, chat_id: chatId })
         });
         const data = await res.json();
         typing.remove();
@@ -542,7 +683,7 @@
           history.push({ role: "user", content: text });
           history.push({ role: "assistant", content: data.reply });
           history = history.slice(-30);  // ให้ตรงกับ MAX_HISTORY ฝั่งเซิร์ฟเวอร์
-          saveSession();
+          remember();
         }
         addMessage(data.reply || data.error || "ขออภัยครับ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะครับ", "bot");
       } catch (err) {
@@ -554,7 +695,21 @@
       }
     }
 
-    loadSession();
+    (async function start() {
+      const saved = recall();
+      if (!saved.name) return;                       // ยังไม่เคยตั้งชื่อ — ให้ modal ถามก่อน
+      userName = saved.name;
+      chatId = saved.chatId || newId();
+      document.getElementById("nameModal").style.display = "none";
+      const res = await fetch("/chats/" + chatId).catch(() => null);
+      if (res && res.ok) {
+        const data = await res.json();
+        history = data.history || [];
+        history.forEach(m => addMessage(m.content, m.role === "user" ? "user" : "bot"));
+      } else {
+        greet();
+      }
+    })();
   </script>
 </body>
 </html>

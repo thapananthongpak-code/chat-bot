@@ -117,17 +117,19 @@ def search(query, limit=6, min_score=1.0):
     return [e for _, e in scored[:limit]]
 
 
+# บอกให้ชัดว่าช่องไหนไม่มีข้อมูล ไม่งั้นโมเดลจะเข้าใจว่าไม่ได้ส่งมาแล้วแต่งเติมเอง
+_MISSING = "(ไม่มีข้อมูลส่วนนี้ในคลังความรู้ ห้ามแต่งขึ้นเอง)"
+
+
 def format_entries(entries):
     blocks = []
     for entry in entries:
-        lines = [f"### {entry['topic']}"]
-        if entry["description"]:
-            lines.append(f"คำอธิบาย: {entry['description']}")
-        if entry["syntax"]:
-            lines.append(f"รูปแบบคำสั่ง: {entry['syntax']}")
-        if entry["example"]:
-            lines.append(f"ตัวอย่าง: {entry['example']}")
-        blocks.append("\n".join(lines))
+        blocks.append("\n".join([
+            f"### {entry['topic']}",
+            f"คำอธิบาย: {entry['description'] or _MISSING}",
+            f"รูปแบบคำสั่ง: {entry['syntax'] or _MISSING}",
+            f"ตัวอย่าง: {entry['example'] or _MISSING}",
+        ]))
     return "\n\n".join(blocks)
 
 
