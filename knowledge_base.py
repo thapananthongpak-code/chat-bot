@@ -228,10 +228,3 @@ def format_entries(entries):
 def topic_index():
     """รายชื่อหัวข้อทั้งหมดในคลังความรู้ ใช้บอกขอบเขตที่ตอบได้"""
     return " | ".join(e["topic"] for e in ENTRIES)
-
-
-def build_context(query, limit=6):
-    entries = search(query, limit=limit)
-    if not entries:
-        return ""
-    return format_entries(entries)

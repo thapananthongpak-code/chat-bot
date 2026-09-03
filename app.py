@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types, errors as genai_errors
+from google.genai import types
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
@@ -170,28 +170,6 @@ def save_web_chat(chat_id, name, history):
         return False
 
 
-def list_web_chats():
-    """รายการแชทที่บันทึกไว้ เรียงจากคุยล่าสุดก่อน"""
-    items = []
-    try:
-        names = os.listdir(DATA_DIR)
-    except OSError:
-        return items
-    for filename in names:
-        if not (filename.startswith("web_") and filename.endswith(".json")):
-            continue
-        data = load_web_chat(filename[4:-5])
-        if data:
-            items.append({
-                "id": data.get("id"),
-                "title": data.get("title") or "แชทใหม่",
-                "updated": data.get("updated") or "",
-                "count": len(data.get("history") or []),
-            })
-    items.sort(key=lambda c: c["updated"], reverse=True)
-    return items
-
-
 def load_line_history(user_id):
     path = os.path.join(DATA_DIR, f"line_{user_id}.json")
     try:
@@ -345,38 +323,6 @@ def _fail_message(exc):
 def index():
     return render_template("index.html")
 
-@app.route("/chat", methods=["POST"])
-def chat_api():
-    """เก็บประวัติเป็นไฟล์ JSON ใน data/ ถ้าส่ง chat_id มา
-    ถ้าเขียนไฟล์ไม่ได้ (เช่นบน Vercel) จะถอยไปใช้ประวัติที่เบราว์เซอร์ส่งมาแทน"""
-    payload = request.get_json(silent=True) or {}
-    user_message = (payload.get("message") or "").strip()
-    if not user_message:
-        return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
-
-    chat_id = (payload.get("chat_id") or "").strip()
-    name = (payload.get("name") or "").strip()[:30]
-
-    saved = load_web_chat(chat_id)
-    if saved:
-        history = saved.get("history") or []
-        name = name or saved.get("name") or ""
-    else:
-        history = clean_history(payload.get("history"))
-
-    history = history + [{"role": "user", "content": user_message}]
-
-    system = SYSTEM_PROMPT
-    if name:
-        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
-
-    reply = chat_with_ai(history, system=system)
-    history.append({"role": "assistant", "content": reply})
-    stored = save_web_chat(chat_id, name, history)
-
-    return jsonify({"reply": reply, "chat_id": chat_id, "stored": stored})
-
-
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """ส่งคำตอบแบบทยอยทีละส่วน ให้ผู้ใช้เห็นตัวอักษรไหลออกมาทันที
@@ -408,19 +354,6 @@ def chat_stream():
     return Response(stream_with_context(generate()),
                     mimetype="text/plain; charset=utf-8",
                     headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
-
-
-@app.route("/chats", methods=["GET"])
-def chats_list():
-    return jsonify({"chats": list_web_chats()})
-
-
-@app.route("/chats/<chat_id>", methods=["GET"])
-def chat_get(chat_id):
-    data = load_web_chat(chat_id)
-    if not data:
-        return jsonify({"error": "ไม่พบแชทนี้"}), 404
-    return jsonify(data)
 
 
 @app.route("/chats/<chat_id>", methods=["DELETE"])
