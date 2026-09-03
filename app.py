@@ -326,6 +326,67 @@ def _fail_message(exc):
     return "ขออภัยครับ ตอนนี้เชื่อมต่อ AI ไม่ได้ ลองใหม่อีกครั้งนะครับ"
 
 
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/chat", methods=["POST"])
+def chat_api():
+    """เก็บประวัติเป็นไฟล์ JSON ใน data/ ถ้าส่ง chat_id มา
+    ถ้าเขียนไฟล์ไม่ได้ (เช่นบน Vercel) จะถอยไปใช้ประวัติที่เบราว์เซอร์ส่งมาแทน"""
+    payload = request.get_json(silent=True) or {}
+    user_message = (payload.get("message") or "").strip()
+    if not user_message:
+        return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
+
+    chat_id = (payload.get("chat_id") or "").strip()
+    name = (payload.get("name") or "").strip()[:30]
+
+    saved = load_web_chat(chat_id)
+    if saved:
+        history = saved.get("history") or []
+        name = name or saved.get("name") or ""
+    else:
+        history = clean_history(payload.get("history"))
+
+    history = history + [{"role": "user", "content": user_message}]
+
+    system = SYSTEM_PROMPT
+    if name:
+        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
+
+    reply = chat_with_ai(history, system=system)
+    history.append({"role": "assistant", "content": reply})
+    stored = save_web_chat(chat_id, name, history)
+
+    return jsonify({"reply": reply, "chat_id": chat_id, "stored": stored})
+
+
+@app.route("/chats", methods=["GET"])
+def chats_list():
+    return jsonify({"chats": list_web_chats()})
+
+
+@app.route("/chats/<chat_id>", methods=["GET"])
+def chat_get(chat_id):
+    data = load_web_chat(chat_id)
+    if not data:
+        return jsonify({"error": "ไม่พบแชทนี้"}), 404
+    return jsonify(data)
+
+
+@app.route("/chats/<chat_id>", methods=["DELETE"])
+def chat_delete(chat_id):
+    path = chat_path(chat_id)
+    if not path:
+        return jsonify({"error": "รหัสแชทไม่ถูกต้อง"}), 400
+    try:
+        os.remove(path)
+    except OSError:
+        pass  # ไม่มีไฟล์อยู่แล้วก็ถือว่าลบสำเร็จ
+    return jsonify({"ok": True})
+
+
 def to_line_text(text):
     """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง"""
     text = re.sub(r"```[a-zA-Z]*\n?", "", text)
