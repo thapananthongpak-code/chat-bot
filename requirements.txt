@@ -1,5 +1,6 @@
 flask
 anthropic
+google-genai
 python-dotenv
 line-bot-sdk
 gunicorn

@@ -14,13 +14,31 @@ python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
 
-**2. ใส่ API key** — เปิดไฟล์ `.env` แล้วเติม key ของ Anthropic (https://console.anthropic.com/settings/keys)
+**2. ใส่ API key** — เปิดไฟล์ `.env` แล้วเติม key
+
+รองรับ 2 เจ้า สลับได้ด้วย `AI_PROVIDER` ถ้าไม่ระบุ ระบบจะเลือกจาก key ที่มีให้เอง
 
 ```
+AI_PROVIDER=gemini
+GEMINI_API_KEY=xxxxxxxxxxxxxxxx        # ขอฟรีที่ https://aistudio.google.com/apikey
+```
+
+หรือใช้ Anthropic
+
+```
+AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 ```
 
-โมเดลที่ใช้คือ `claude-haiku-4-5` เปลี่ยนได้โดยใส่ `ANTHROPIC_MODEL` ใน `.env`
+เปลี่ยนโมเดลได้ด้วย `GEMINI_MODEL` (ค่าเริ่มต้น `gemini-3.5-flash`)
+หรือ `ANTHROPIC_MODEL` (ค่าเริ่มต้น `claude-haiku-4-5`)
+
+ดูว่า key ของคุณใช้โมเดลไหนได้บ้าง:
+
+```bash
+./venv/bin/python -c "from google import genai; import os; \
+[print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"
+```
 
 ส่วน `LINE_CHANNEL_ACCESS_TOKEN` และ `LINE_CHANNEL_SECRET` ใส่เฉพาะตอนจะต่อ LINE ถ้ารันแค่หน้าเว็บ ปล่อยว่างไว้ได้
 
@@ -36,7 +54,7 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `app.py` | เซิร์ฟเวอร์ Flask, system prompt, เชื่อม Claude API และ LINE webhook |
+| `app.py` | เซิร์ฟเวอร์ Flask, system prompt, เชื่อม Gemini/Claude API และ LINE webhook |
 | `knowledge_base.py` | โหลด CSV และค้นหาหัวข้อที่ตรงกับคำถาม เพื่อแนบไปกับ prompt |
 | `knowledge/*.md` | คลังความรู้ SQL (รองรับ `.csv` ด้วย) |
 | `tools_pdf_to_md.py` | เครื่องมือแปลงคู่มือ PDF เป็น Markdown |
@@ -105,8 +123,10 @@ Vercel ตรวจจับ Flask ให้อัตโนมัติ เพ�
 
    | ตัวแปร | จำเป็น |
    |---|---|
-   | `ANTHROPIC_API_KEY` | ใช่ |
-   | `ANTHROPIC_MODEL` | ไม่ (ค่าเริ่มต้น `claude-haiku-4-5`) |
+   | `GEMINI_API_KEY` | ใช่ (ถ้าใช้ Gemini) |
+   | `ANTHROPIC_API_KEY` | ใช่ (ถ้าใช้ Anthropic) |
+   | `AI_PROVIDER` | ไม่ (ระบบเลือกจาก key ที่มี) |
+   | `GEMINI_MODEL` / `ANTHROPIC_MODEL` | ไม่ |
    | `LINE_CHANNEL_ACCESS_TOKEN` | เฉพาะตอนใช้ LINE |
    | `LINE_CHANNEL_SECRET` | เฉพาะตอนใช้ LINE |
 

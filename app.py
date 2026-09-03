@@ -1,6 +1,8 @@
 from flask import Flask, render_template, request, jsonify, abort
 from dotenv import load_dotenv
 import anthropic
+from google import genai
+from google.genai import types, errors as genai_errors
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
@@ -14,11 +16,26 @@ load_dotenv()
 app = Flask(__name__)
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
-if not ANTHROPIC_API_KEY:
-    print("[!] ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY ในไฟล์ .env — บอทจะตอบไม่ได้ (ขอ key ที่ https://console.anthropic.com/settings/keys)")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+# เลือกผู้ให้บริการจาก AI_PROVIDER ถ้าไม่ระบุ จะดูว่ามี key ของเจ้าไหนอยู่
+AI_PROVIDER = (os.getenv("AI_PROVIDER", "").strip().lower()
+               or ("gemini" if GEMINI_API_KEY else "anthropic"))
+API_KEY = GEMINI_API_KEY if AI_PROVIDER == "gemini" else ANTHROPIC_API_KEY
+
+if not API_KEY:
+    need = "GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY"
+    where = ("https://aistudio.google.com/apikey" if AI_PROVIDER == "gemini"
+             else "https://console.anthropic.com/settings/keys")
+    print(f"[!] ยังไม่ได้ตั้งค่า {need} ในไฟล์ .env — บอทจะตอบไม่ได้ (ขอ key ที่ {where})")
+
+CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
+MODEL = GEMINI_MODEL if AI_PROVIDER == "gemini" else CLAUDE_MODEL
 
 claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY or "missing-key")
-CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5").strip()
+# สร้าง client ครั้งเดียวตอนเริ่ม ถ้าสร้างใหม่ทุกคำขอจะโดนปิดตัวเองระหว่างทาง
+gemini = genai.Client(api_key=GEMINI_API_KEY or "missing-key")
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
 
@@ -230,7 +247,40 @@ def trim_history(history):
     return recent
 
 
-def chat_with_claude(history, system=SYSTEM_PROMPT):
+def _ask_claude(system, recent):
+    response = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
+        system=system,
+        messages=recent,
+    )
+    return "".join(b.text for b in response.content if b.type == "text")
+
+
+def _ask_gemini(system, recent):
+    # Gemini เรียกฝั่งผู้ช่วยว่า "model" ไม่ใช่ "assistant"
+    contents = [
+        types.Content(
+            role="user" if m["role"] == "user" else "model",
+            parts=[types.Part.from_text(text=m["content"])],
+        )
+        for m in recent
+    ]
+    response = gemini.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            max_output_tokens=2048,
+            temperature=0.3,  # ต่ำไว้ เพราะต้องเรียบเรียงตามไฟล์ ไม่ใช่คิดเอง
+            # ไม่ได้ใช้ tool ปิดไว้กัน warning รก log
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        ),
+    )
+    return (response.text or "").strip()
+
+
+def chat_with_ai(history, system=SYSTEM_PROMPT):
     recent = trim_history(history)
     entries = kb.search(search_query(recent), limit=6)
 
@@ -239,90 +289,41 @@ def chat_with_claude(history, system=SYSTEM_PROMPT):
     if STRICT_KNOWLEDGE and not entries:
         return OUT_OF_SCOPE_REPLY
 
-    # Haiku ไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
+    # ทั้งสองเจ้าไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
     full_system = f"{system}\n\n{build_reference(entries)}"
 
-    if not ANTHROPIC_API_KEY:
-        return "ยังไม่ได้ตั้งค่า ANTHROPIC_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
+    if not API_KEY:
+        need = "GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY"
+        return f"ยังไม่ได้ตั้งค่า {need} ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
+
     try:
-        response = claude.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
-            system=full_system,
-            messages=recent,
-        )
-    except anthropic.AuthenticationError:
-        return "ANTHROPIC_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
+        if AI_PROVIDER == "gemini":
+            return _ask_gemini(full_system, recent)
+        return _ask_claude(full_system, recent)
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+        return "API key ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
     except anthropic.RateLimitError:
         return "ตอนนี้มีคำถามเข้ามาเยอะครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ"
-    except anthropic.APIError as exc:
-        print(f"[!] เรียก Claude ไม่สำเร็จ: {type(exc).__name__}: {exc}")
-        if app.debug:  # ตอน dev แสดงสาเหตุจริงในแชตเลย จะได้ไม่ต้องไล่หาใน terminal
-            return f"เรียก Claude ไม่สำเร็จครับ\n\n{type(exc).__name__}: {exc}"
-        return "ขออภัยครับ ตอนนี้เชื่อมต่อ AI ไม่ได้ ลองใหม่อีกครั้งนะครับ"
-
-    return "".join(b.text for b in response.content if b.type == "text")
-
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-@app.route("/chat", methods=["POST"])
-def chat_api():
-    """เก็บประวัติเป็นไฟล์ JSON ใน data/ ถ้าส่ง chat_id มา
-    ถ้าเขียนไฟล์ไม่ได้ (เช่นบน Vercel) จะถอยไปใช้ประวัติที่เบราว์เซอร์ส่งมาแทน"""
-    payload = request.get_json(silent=True) or {}
-    user_message = (payload.get("message") or "").strip()
-    if not user_message:
-        return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
-
-    chat_id = (payload.get("chat_id") or "").strip()
-    name = (payload.get("name") or "").strip()[:30]
-
-    saved = load_web_chat(chat_id)
-    if saved:
-        history = saved.get("history") or []
-        name = name or saved.get("name") or ""
-    else:
-        history = clean_history(payload.get("history"))
-
-    history = history + [{"role": "user", "content": user_message}]
-
-    system = SYSTEM_PROMPT
-    if name:
-        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
-
-    reply = chat_with_claude(history, system=system)
-    history.append({"role": "assistant", "content": reply})
-    stored = save_web_chat(chat_id, name, history)
-
-    return jsonify({"reply": reply, "chat_id": chat_id, "stored": stored})
+    except genai_errors.ClientError as exc:
+        print(f"[!] เรียก Gemini ไม่สำเร็จ: {exc}")
+        detail = str(exc)
+        if getattr(exc, "code", None) == 429:
+            return "โควตาฟรีของ Gemini เต็มชั่วคราวครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ"
+        if "API_KEY_INVALID" in detail or "API key not valid" in detail:
+            return "GEMINI_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
+        if getattr(exc, "code", None) == 404:
+            return (f"ไม่พบโมเดล '{GEMINI_MODEL}' ครับ อาจถูกเปลี่ยนชื่อหรือ key ยังเข้าไม่ถึง\n"
+                    "ลองเปลี่ยนค่า GEMINI_MODEL ใน .env เป็นรุ่นอื่น เช่น gemini-3.5-flash-lite")
+        return _fail_message(exc)
+    except Exception as exc:
+        print(f"[!] เรียก {AI_PROVIDER} ไม่สำเร็จ: {type(exc).__name__}: {exc}")
+        return _fail_message(exc)
 
 
-@app.route("/chats", methods=["GET"])
-def chats_list():
-    return jsonify({"chats": list_web_chats()})
-
-
-@app.route("/chats/<chat_id>", methods=["GET"])
-def chat_get(chat_id):
-    data = load_web_chat(chat_id)
-    if not data:
-        return jsonify({"error": "ไม่พบแชทนี้"}), 404
-    return jsonify(data)
-
-
-@app.route("/chats/<chat_id>", methods=["DELETE"])
-def chat_delete(chat_id):
-    path = chat_path(chat_id)
-    if not path:
-        return jsonify({"error": "รหัสแชทไม่ถูกต้อง"}), 400
-    try:
-        os.remove(path)
-    except OSError:
-        pass  # ไม่มีไฟล์อยู่แล้วก็ถือว่าลบสำเร็จ
-    return jsonify({"ok": True})
+def _fail_message(exc):
+    if app.debug:  # ตอน dev แสดงสาเหตุจริงในแชตเลย จะได้ไม่ต้องไล่หาใน terminal
+        return f"เรียก AI ไม่สำเร็จครับ\n\n{type(exc).__name__}: {exc}"
+    return "ขออภัยครับ ตอนนี้เชื่อมต่อ AI ไม่ได้ ลองใหม่อีกครั้งนะครับ"
 
 
 def to_line_text(text):
@@ -354,7 +355,7 @@ def handle_message(event):
     user_text = event.message.text
     history = load_line_history(user_id)
     history.append({"role": "user", "content": user_text})
-    reply = chat_with_claude(history)
+    reply = chat_with_ai(history)
     history.append({"role": "assistant", "content": reply})
     save_line_history(user_id, history)
     with ApiClient(configuration) as api_client:
