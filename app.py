@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, abort
+from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types, errors as genai_errors
@@ -15,7 +15,9 @@ load_dotenv()
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
+# flash-lite ให้โควตาฟรีมากกว่า flash 3 เท่า (15 vs 5 คำขอ/นาที) และตอบเร็วกว่า ~3 เท่า
+# อยากได้คำตอบละเอียดกว่านี้ เปลี่ยนเป็น gemini-3.5-flash ใน .env ได้
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 
 if not GEMINI_API_KEY:
     print("[!] ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env — บอทจะตอบไม่ได้ "
@@ -71,12 +73,22 @@ STRICT_RULES = """
 - ถ้าข้อมูลอ้างอิงไม่มีเนื้อหาที่ตอบคำถามได้ ให้บอกตรง ๆ ว่า
   "เรื่องนี้ยังไม่มีอยู่ในคลังความรู้ของผมครับ" แล้วแนะนำหัวข้อใกล้เคียงที่มีในข้อมูลอ้างอิงแทน
   ห้ามเดา ห้ามตอบจากความรู้ทั่วไป แม้จะมั่นใจว่าถูกก็ตาม
-- เขียนคำสั่ง SQL ให้ตรงโจทย์ได้ แต่ต้องประกอบจากคำสั่งที่ปรากฏในข้อมูลอ้างอิงเท่านั้น
-- ถ้าต้องสมมติชื่อตาราง/คอลัมน์ ให้ใช้ชื่อที่ปรากฏในข้อมูลอ้างอิง และบอกว่าสมมติไว้อย่างไร
+แยกให้ชัดระหว่าง 2 สถานการณ์:
 
-กฎการยกตัวอย่างและการขยายความ (ห้ามละเมิด):
-- ยกได้เฉพาะตัวอย่างที่ปรากฏในช่อง "ตัวอย่าง" หรือ "รูปแบบคำสั่ง" ของข้อมูลอ้างอิงเท่านั้น
-- ห้ามคิดตัวอย่างเพิ่มเองเด็ดขาด แม้จะถูกต้องตามหลัก SQL ก็ตาม
+ก) ผู้ใช้ถามว่า "X คืออะไร / ใช้ยังไง" (ถามความรู้)
+   ให้อธิบายตามข้อมูลอ้างอิง และยกได้เฉพาะตัวอย่างที่ปรากฏในข้อมูลอ้างอิงเท่านั้น
+   ห้ามคิดตัวอย่างเพิ่มเองเด็ดขาด แม้จะถูกต้องตามหลัก SQL ก็ตาม
+
+ข) ผู้ใช้ตั้งโจทย์ให้เขียนคำสั่ง (เช่น "หาลูกค้าที่ยอดสั่งซื้อเกิน 1000")
+   *** กรณีนี้ให้เขียนคำสั่งให้เสมอ ห้ามปฏิเสธ *** ตราบใดที่คำสั่งที่ต้องใช้
+   (เช่น SUM, GROUP BY, HAVING, JOIN) ปรากฏอยู่ในข้อมูลอ้างอิง
+   การนำคำสั่งที่มีในข้อมูลอ้างอิงมาประกอบกันเพื่อตอบโจทย์ ไม่ถือว่าแต่งขึ้นเอง
+   แต่ห้ามใช้คำสั่งหรือฟังก์ชันที่ไม่ปรากฏในข้อมูลอ้างอิง
+   ถ้าต้องสมมติชื่อตาราง/คอลัมน์ ให้ใช้ชื่อที่ปรากฏในข้อมูลอ้างอิง และบอกว่าสมมติไว้อย่างไร
+
+จะปฏิเสธได้ก็ต่อเมื่อ "คำสั่งที่จำเป็นต้องใช้" ไม่มีอยู่ในข้อมูลอ้างอิงจริง ๆ เท่านั้น
+
+กฎการขยายความ (ห้ามละเมิด):
 - ถ้าช่องใดเขียนว่าไม่มีข้อมูลในคลังความรู้ ให้ข้ามส่วนนั้นไปเลย ห้ามเติมให้
   เช่น ถ้าไม่มีตัวอย่าง ก็ไม่ต้องมีหัวข้อ "ตัวอย่าง" ในคำตอบ
 - ห้ามเพิ่มหัวข้อ "ข้อควรระวัง" "ทริก" หรือคำอธิบายผลลัพธ์ ถ้าเนื้อหานั้นไม่ได้อยู่ในข้อมูลอ้างอิง
@@ -234,17 +246,17 @@ def trim_history(history):
     return recent
 
 
-def chat_with_ai(history, system=SYSTEM_PROMPT):
+def prepare(history, system):
+    """เตรียมข้อมูลสำหรับเรียก Gemini คืน (contents, config) หรือ (None, ข้อความตอบแทน)"""
     recent = trim_history(history)
     entries = kb.search(search_query(recent), limit=6)
 
     # โหมดเข้ม: ค้นไม่เจอเลยก็ตอบปฏิเสธไปตรง ๆ ไม่ต้องเรียก API
     # การันตีว่าคำตอบไม่หลุดออกนอกคลังความรู้ และประหยัดโควตาไปด้วย
     if STRICT_KNOWLEDGE and not entries:
-        return OUT_OF_SCOPE_REPLY
-
+        return None, OUT_OF_SCOPE_REPLY
     if not GEMINI_API_KEY:
-        return "ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
+        return None, "ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
 
     # Gemini ไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
     full_system = f"{system}\n\n{build_reference(entries)}"
@@ -256,33 +268,64 @@ def chat_with_ai(history, system=SYSTEM_PROMPT):
         )
         for m in recent
     ]
+    config = types.GenerateContentConfig(
+        system_instruction=full_system,
+        max_output_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
+        temperature=0.3,  # ต่ำไว้ เพราะต้องเรียบเรียงตามไฟล์ ไม่ใช่คิดเอง
+        # ไม่ได้ใช้ tool ปิดไว้กัน warning รก log
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
+    return (contents, config), None
 
+
+def explain_error(exc):
+    """แปลง error ของ Gemini เป็นข้อความภาษาไทยที่ผู้ใช้เข้าใจ"""
+    print(f"[!] เรียก Gemini ไม่สำเร็จ: {type(exc).__name__}: {exc}")
+    detail, code = str(exc), getattr(exc, "code", None)
+    if code == 429:
+        wait = re.search(r"retryDelay['\"]?:\s*['\"]?(\d+)", detail)
+        more = f" (อีกประมาณ {wait.group(1)} วินาที)" if wait else ""
+        return f"โควตาฟรีของ Gemini เต็มชั่วคราวครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ{more}"
+    if "API_KEY_INVALID" in detail or "API key not valid" in detail:
+        return "GEMINI_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
+    if code == 404:
+        return (f"ไม่พบโมเดล '{GEMINI_MODEL}' ครับ อาจถูกเปลี่ยนชื่อหรือ key ยังเข้าไม่ถึง\n"
+                "ลองเปลี่ยนค่า GEMINI_MODEL ใน .env เป็นรุ่นอื่น เช่น gemini-3.5-flash")
+    return _fail_message(exc)
+
+
+def stream_reply(history, system=SYSTEM_PROMPT):
+    """ทยอยส่งคำตอบทีละส่วน ผู้ใช้จะเห็นตัวอักษรไหลออกมาแทนการรอหน้าจอเปล่า"""
+    ready, fallback = prepare(history, system)
+    if fallback is not None:
+        yield fallback
+        return
+    contents, config = ready
+    try:
+        got = False
+        for chunk in gemini.models.generate_content_stream(
+            model=GEMINI_MODEL, contents=contents, config=config
+        ):
+            if chunk.text:
+                got = True
+                yield chunk.text
+        if not got:
+            yield "ขออภัยครับ ผมตอบคำถามนี้ไม่ได้ ลองถามใหม่อีกแบบได้ไหมครับ"
+    except Exception as exc:
+        yield explain_error(exc)
+
+
+def chat_with_ai(history, system=SYSTEM_PROMPT):
+    ready, fallback = prepare(history, system)
+    if fallback is not None:
+        return fallback
+    contents, config = ready
     try:
         response = gemini.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=full_system,
-                max_output_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
-                temperature=0.3,  # ต่ำไว้ เพราะต้องเรียบเรียงตามไฟล์ ไม่ใช่คิดเอง
-                # ไม่ได้ใช้ tool ปิดไว้กัน warning รก log
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            ),
+            model=GEMINI_MODEL, contents=contents, config=config
         )
-    except genai_errors.ClientError as exc:
-        print(f"[!] เรียก Gemini ไม่สำเร็จ: {exc}")
-        detail, code = str(exc), getattr(exc, "code", None)
-        if code == 429:
-            return "โควตาฟรีของ Gemini เต็มชั่วคราวครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ"
-        if "API_KEY_INVALID" in detail or "API key not valid" in detail:
-            return "GEMINI_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
-        if code == 404:
-            return (f"ไม่พบโมเดล '{GEMINI_MODEL}' ครับ อาจถูกเปลี่ยนชื่อหรือ key ยังเข้าไม่ถึง\n"
-                    "ลองเปลี่ยนค่า GEMINI_MODEL ใน .env เป็นรุ่นอื่น เช่น gemini-3.5-flash-lite")
-        return _fail_message(exc)
     except Exception as exc:
-        print(f"[!] เรียก Gemini ไม่สำเร็จ: {type(exc).__name__}: {exc}")
-        return _fail_message(exc)
+        return explain_error(exc)
 
     text = (response.text or "").strip()
     if text:
@@ -332,6 +375,39 @@ def chat_api():
     stored = save_web_chat(chat_id, name, history)
 
     return jsonify({"reply": reply, "chat_id": chat_id, "stored": stored})
+
+
+@app.route("/chat/stream", methods=["POST"])
+def chat_stream():
+    """ส่งคำตอบแบบทยอยทีละส่วน ให้ผู้ใช้เห็นตัวอักษรไหลออกมาทันที
+    ใช้ text/plain แบบ chunked ไม่ต้องพึ่ง SSE ให้ยุ่งยาก"""
+    payload = request.get_json(silent=True) or {}
+    user_message = (payload.get("message") or "").strip()
+    if not user_message:
+        return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
+
+    chat_id = (payload.get("chat_id") or "").strip()
+    saved = load_web_chat(chat_id)
+    name = (payload.get("name") or "").strip()[:30] or (saved.get("name") if saved else "")
+    history = (saved.get("history") or []) if saved else clean_history(payload.get("history"))
+    history = history + [{"role": "user", "content": user_message}]
+
+    system = SYSTEM_PROMPT
+    if name:
+        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
+
+    def generate():
+        collected = []
+        for piece in stream_reply(history, system=system):
+            collected.append(piece)
+            yield piece
+        reply = "".join(collected)
+        if reply:
+            save_web_chat(chat_id, name, history + [{"role": "assistant", "content": reply}])
+
+    return Response(stream_with_context(generate()),
+                    mimetype="text/plain; charset=utf-8",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
 
 
 @app.route("/chats", methods=["GET"])

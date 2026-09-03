@@ -20,7 +20,9 @@ python3 -m venv venv
 GEMINI_API_KEY=xxxxxxxxxxxxxxxx
 ```
 
-โมเดลที่ใช้คือ `gemini-3.5-flash` เปลี่ยนได้โดยใส่ `GEMINI_MODEL` ใน `.env`
+โมเดลเริ่มต้นคือ `gemini-3.5-flash-lite` — โควตาฟรีมากกว่า `gemini-3.5-flash` ถึง 3 เท่า
+(15 เทียบกับ 5 คำขอ/นาที) และตอบเร็วกว่าราว 3 เท่า ถ้าอยากได้คำตอบละเอียดกว่านี้
+เปลี่ยนเป็น `GEMINI_MODEL=gemini-3.5-flash` ใน `.env` ได้
 ดูว่า key ของคุณใช้โมเดลไหนได้บ้าง:
 
 ```bash
@@ -46,7 +48,7 @@ GEMINI_API_KEY=xxxxxxxxxxxxxxxx
 | `knowledge_base.py` | โหลด CSV และค้นหาหัวข้อที่ตรงกับคำถาม เพื่อแนบไปกับ prompt |
 | `knowledge/*.md` | คลังความรู้ SQL (รองรับ `.csv` ด้วย) |
 | `tools_pdf_to_md.py` | เครื่องมือแปลงคู่มือ PDF เป็น Markdown |
-| `templates/index.html` | หน้าเว็บแชต พร้อมไฮไลต์โค้ด SQL |
+| `templates/index.html` | หน้าเว็บแชต แสดงคำตอบแบบทยอยพิมพ์ พร้อมไฮไลต์โค้ด SQL |
 | `data/` | ประวัติแชตเป็นไฟล์ JSON — `web_<chat_id>.json` และ `line_<user_id>.json` (ไม่ขึ้น git) |
 
 ## ขอบเขตคำตอบ

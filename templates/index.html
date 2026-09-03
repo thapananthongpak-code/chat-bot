@@ -152,6 +152,20 @@
     .str, .num { opacity: .72; }
     .cmt { opacity: .45; font-style: italic; }
 
+    .turn-tools { display: flex; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity .16s; }
+    .turn.bot:hover .turn-tools, .turn-tools.show { opacity: 1; }
+    .tool {
+      background: none; border: none; color: var(--muted); cursor: pointer;
+      font-family: inherit; font-size: 12px; padding: 4px 9px; border-radius: 7px;
+      transition: color .16s, background .16s;
+    }
+    .tool:hover { color: var(--fg); background: var(--surface-2); }
+    .caret {
+      display: inline-block; width: 7px; height: 15px; vertical-align: -2px;
+      background: var(--fg); margin-left: 2px; animation: caret .9s steps(2) infinite;
+    }
+    @keyframes caret { 50% { opacity: 0; } }
+
     .typing { display: flex; gap: 5px; align-items: center; height: 22px; }
     .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); display: block; animation: blink 1.2s infinite; }
     .typing i:nth-child(2) { animation-delay: .18s; }
@@ -434,7 +448,10 @@
       turns.innerHTML = "";
       const c = current();
       if (c && c.history.length) {
-        c.history.forEach(m => addTurn(m.content, m.role === "user" ? "user" : "bot"));
+        c.history.forEach(m => {
+          const el = addTurn(m.content, m.role === "user" ? "user" : "bot");
+          if (m.role !== "user") addTools(el, m.content, null);
+        });
       } else {
         welcome();
       }
@@ -520,48 +537,115 @@
       if (e.key === "Enter" && !e.shiftKey && !isTouch) { e.preventDefault(); sendMessage(); }
     });
 
-    async function sendMessage() {
-      if (busy) return;
-      const text = input.value.trim();
-      if (!text) return;
+    let controller = null;   // ใช้กดหยุดกลางคัน
 
+    function setBusy(on) {
+      busy = on;
+      sendBtn.textContent = on ? "■" : "↑";
+      sendBtn.title = on ? "หยุด" : "ส่ง";
+    }
+
+    function addTools(el, text, onRetry) {
+      const box = document.createElement("div");
+      box.className = "turn-tools";
+      const copy = document.createElement("button");
+      copy.className = "tool"; copy.textContent = "คัดลอก";
+      copy.onclick = () => {
+        navigator.clipboard.writeText(text);
+        copy.textContent = "คัดลอกแล้ว";
+        setTimeout(() => { copy.textContent = "คัดลอก"; }, 1500);
+      };
+      box.appendChild(copy);
+      if (onRetry) {
+        const again = document.createElement("button");
+        again.className = "tool"; again.textContent = "ถามใหม่";
+        again.onclick = onRetry;
+        box.appendChild(again);
+      }
+      el.appendChild(box);
+    }
+
+    async function ask(text, replaceLast) {
       const id = state.activeId;
       const c = current();
-      const history = c && c.history ? c.history.slice() : [];
-      if (!history.length) turns.innerHTML = "";   // ล้างข้อความต้อนรับก่อนเริ่มคุยจริง
+      let history = c && c.history ? c.history.slice() : [];
+      if (replaceLast) history = history.slice(0, -2);   // ถามใหม่: ตัดคู่ถาม-ตอบเดิมออก
+      if (!history.length) turns.innerHTML = "";
 
-      addTurn(text, "user");
-      input.value = ""; grow();
-      busy = true; sendBtn.disabled = true;
+      if (!replaceLast) addTurn(text, "user");
 
-      const wait = document.createElement("div");
-      wait.className = "turn bot";
-      wait.innerHTML = '<div class="who">ครูเอสคิว</div><div class="typing"><i></i><i></i><i></i></div>';
-      turns.appendChild(wait); toBottom();
+      const el = document.createElement("div");
+      el.className = "turn bot";
+      el.innerHTML = '<div class="who">ครูเอสคิว</div><div class="typing"><i></i><i></i><i></i></div>';
+      turns.appendChild(el); toBottom();
 
-      let reply;
+      setBusy(true);
+      controller = new AbortController();
+      let reply = "", stopped = false;
+
       try {
-        const res = await fetch("/chat", {
+        const res = await fetch("/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, history, chat_id: id })
+          body: JSON.stringify({ message: text, history, chat_id: id }),
+          signal: controller.signal,
         });
-        const data = await res.json();
-        reply = data.reply || data.error || "ขออภัยครับ เกิดข้อผิดพลาด ลองใหม่อีกครั้งนะครับ";
-      } catch (err) {
-        reply = "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จครับ ลองใหม่อีกครั้งนะครับ";
-      }
-      wait.remove();
-      addTurn(reply, "bot");
+        if (!res.ok || !res.body) throw new Error("bad response");
 
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();   // stream:true กัน UTF-8 ไทยขาดกลางตัวอักษร
+        const body = document.createElement("div");
+        body.className = "body";
+        let started = false, pending = false;
+
+        const draw = () => {
+          body.innerHTML = renderMarkdown(reply) + '<span class="caret"></span>';
+          toBottom();
+          pending = false;
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          reply += decoder.decode(value, { stream: true });
+          if (!started) { el.querySelector(".typing").replaceWith(body); started = true; }
+          if (!pending) { pending = true; requestAnimationFrame(draw); }
+        }
+        reply += decoder.decode();
+        body.innerHTML = renderMarkdown(reply);
+        if (!started) el.querySelector(".typing").replaceWith(body);
+      } catch (err) {
+        stopped = err && err.name === "AbortError";
+        if (!reply) {
+          reply = stopped ? "(หยุดแล้ว)" : "เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จครับ ลองใหม่อีกครั้งนะครับ";
+          const body = document.createElement("div");
+          body.className = "body";
+          body.innerHTML = renderMarkdown(reply);
+          const t = el.querySelector(".typing");
+          if (t) t.replaceWith(body); else el.appendChild(body);
+        } else {
+          el.querySelector(".body").innerHTML = renderMarkdown(reply);
+        }
+      } finally {
+        controller = null;
+        setBusy(false);
+      }
+
+      addTools(el, reply, () => ask(text, true));
       history.push({ role: "user", content: text });
       history.push({ role: "assistant", content: reply });
       touch(id, history.slice(-30));   // ให้ตรงกับ MAX_HISTORY ฝั่งเซิร์ฟเวอร์
       document.getElementById("chatTitle").textContent = state.chats[id].title;
       paintList();
-
-      busy = false; sendBtn.disabled = false;
       if (!isTouch) input.focus();
+    }
+
+    function sendMessage() {
+      if (busy) { if (controller) controller.abort(); return; }   // กดซ้ำ = หยุด
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = ""; grow();
+      ask(text, false);
     }
 
     /* ================= เริ่มทำงาน ================= */
