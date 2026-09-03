@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify, abort
 from dotenv import load_dotenv
-import anthropic
 from google import genai
 from google.genai import types, errors as genai_errors
 from linebot.v3 import WebhookHandler
@@ -15,25 +14,13 @@ import knowledge_base as kb
 load_dotenv()
 app = Flask(__name__)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-
-# เลือกผู้ให้บริการจาก AI_PROVIDER ถ้าไม่ระบุ จะดูว่ามี key ของเจ้าไหนอยู่
-AI_PROVIDER = (os.getenv("AI_PROVIDER", "").strip().lower()
-               or ("gemini" if GEMINI_API_KEY else "anthropic"))
-API_KEY = GEMINI_API_KEY if AI_PROVIDER == "gemini" else ANTHROPIC_API_KEY
-
-if not API_KEY:
-    need = "GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY"
-    where = ("https://aistudio.google.com/apikey" if AI_PROVIDER == "gemini"
-             else "https://console.anthropic.com/settings/keys")
-    print(f"[!] ยังไม่ได้ตั้งค่า {need} ในไฟล์ .env — บอทจะตอบไม่ได้ (ขอ key ที่ {where})")
-
-CLAUDE_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
-MODEL = GEMINI_MODEL if AI_PROVIDER == "gemini" else CLAUDE_MODEL
 
-claude = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY or "missing-key")
+if not GEMINI_API_KEY:
+    print("[!] ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env — บอทจะตอบไม่ได้ "
+          "(ขอ key ฟรีที่ https://aistudio.google.com/apikey)")
+
 # สร้าง client ครั้งเดียวตอนเริ่ม ถ้าสร้างใหม่ทุกคำขอจะโดนปิดตัวเองระหว่างทาง
 gemini = genai.Client(api_key=GEMINI_API_KEY or "missing-key")
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
@@ -240,24 +227,27 @@ def build_reference(entries):
 
 
 def trim_history(history):
-    """ตัดเอาเฉพาะข้อความล่าสุด และต้องเริ่มด้วย role user เท่านั้น (ข้อบังคับของ Anthropic API)"""
+    """ตัดเอาเฉพาะข้อความล่าสุด และต้องเริ่มด้วย role user เท่านั้น (ข้อบังคับของ Gemini API)"""
     recent = history[-MAX_HISTORY:]
     while recent and recent[0]["role"] != "user":
         recent.pop(0)
     return recent
 
 
-def _ask_claude(system, recent):
-    response = claude.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
-        system=system,
-        messages=recent,
-    )
-    return "".join(b.text for b in response.content if b.type == "text")
+def chat_with_ai(history, system=SYSTEM_PROMPT):
+    recent = trim_history(history)
+    entries = kb.search(search_query(recent), limit=6)
 
+    # โหมดเข้ม: ค้นไม่เจอเลยก็ตอบปฏิเสธไปตรง ๆ ไม่ต้องเรียก API
+    # การันตีว่าคำตอบไม่หลุดออกนอกคลังความรู้ และประหยัดโควตาไปด้วย
+    if STRICT_KNOWLEDGE and not entries:
+        return OUT_OF_SCOPE_REPLY
 
-def _ask_gemini(system, recent):
+    if not GEMINI_API_KEY:
+        return "ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
+
+    # Gemini ไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
+    full_system = f"{system}\n\n{build_reference(entries)}"
     # Gemini เรียกฝั่งผู้ช่วยว่า "model" ไม่ใช่ "assistant"
     contents = [
         types.Content(
@@ -266,58 +256,40 @@ def _ask_gemini(system, recent):
         )
         for m in recent
     ]
-    response = gemini.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            max_output_tokens=2048,
-            temperature=0.3,  # ต่ำไว้ เพราะต้องเรียบเรียงตามไฟล์ ไม่ใช่คิดเอง
-            # ไม่ได้ใช้ tool ปิดไว้กัน warning รก log
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        ),
-    )
-    return (response.text or "").strip()
-
-
-def chat_with_ai(history, system=SYSTEM_PROMPT):
-    recent = trim_history(history)
-    entries = kb.search(search_query(recent), limit=6)
-
-    # โหมดเข้ม: ค้นไม่เจอเลยก็ตอบปฏิเสธไปตรง ๆ ไม่ต้องเรียก API
-    # การันตีว่าคำตอบไม่หลุดออกนอกคลังความรู้ และประหยัดค่าใช้จ่ายไปด้วย
-    if STRICT_KNOWLEDGE and not entries:
-        return OUT_OF_SCOPE_REPLY
-
-    # ทั้งสองเจ้าไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
-    full_system = f"{system}\n\n{build_reference(entries)}"
-
-    if not API_KEY:
-        need = "GEMINI_API_KEY" if AI_PROVIDER == "gemini" else "ANTHROPIC_API_KEY"
-        return f"ยังไม่ได้ตั้งค่า {need} ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
 
     try:
-        if AI_PROVIDER == "gemini":
-            return _ask_gemini(full_system, recent)
-        return _ask_claude(full_system, recent)
-    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
-        return "API key ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
-    except anthropic.RateLimitError:
-        return "ตอนนี้มีคำถามเข้ามาเยอะครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ"
+        response = gemini.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=full_system,
+                max_output_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
+                temperature=0.3,  # ต่ำไว้ เพราะต้องเรียบเรียงตามไฟล์ ไม่ใช่คิดเอง
+                # ไม่ได้ใช้ tool ปิดไว้กัน warning รก log
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
+        )
     except genai_errors.ClientError as exc:
         print(f"[!] เรียก Gemini ไม่สำเร็จ: {exc}")
-        detail = str(exc)
-        if getattr(exc, "code", None) == 429:
+        detail, code = str(exc), getattr(exc, "code", None)
+        if code == 429:
             return "โควตาฟรีของ Gemini เต็มชั่วคราวครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ"
         if "API_KEY_INVALID" in detail or "API key not valid" in detail:
             return "GEMINI_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
-        if getattr(exc, "code", None) == 404:
+        if code == 404:
             return (f"ไม่พบโมเดล '{GEMINI_MODEL}' ครับ อาจถูกเปลี่ยนชื่อหรือ key ยังเข้าไม่ถึง\n"
                     "ลองเปลี่ยนค่า GEMINI_MODEL ใน .env เป็นรุ่นอื่น เช่น gemini-3.5-flash-lite")
         return _fail_message(exc)
     except Exception as exc:
-        print(f"[!] เรียก {AI_PROVIDER} ไม่สำเร็จ: {type(exc).__name__}: {exc}")
+        print(f"[!] เรียก Gemini ไม่สำเร็จ: {type(exc).__name__}: {exc}")
         return _fail_message(exc)
+
+    text = (response.text or "").strip()
+    if text:
+        return text
+    # Gemini คืนข้อความว่างได้เมื่อโดนตัวกรองความปลอดภัยหรือชนเพดาน token
+    print(f"[!] Gemini คืนข้อความว่าง: {getattr(response, 'prompt_feedback', None)}")
+    return "ขออภัยครับ ผมตอบคำถามนี้ไม่ได้ ลองถามใหม่อีกแบบได้ไหมครับ"
 
 
 def _fail_message(exc):

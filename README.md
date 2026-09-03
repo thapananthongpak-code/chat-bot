@@ -14,25 +14,13 @@ python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
 
-**2. ใส่ API key** — เปิดไฟล์ `.env` แล้วเติม key
-
-รองรับ 2 เจ้า สลับได้ด้วย `AI_PROVIDER` ถ้าไม่ระบุ ระบบจะเลือกจาก key ที่มีให้เอง
+**2. ใส่ API key** — เปิดไฟล์ `.env` แล้วเติม key ของ Gemini (ขอฟรีที่ https://aistudio.google.com/apikey)
 
 ```
-AI_PROVIDER=gemini
-GEMINI_API_KEY=xxxxxxxxxxxxxxxx        # ขอฟรีที่ https://aistudio.google.com/apikey
+GEMINI_API_KEY=xxxxxxxxxxxxxxxx
 ```
 
-หรือใช้ Anthropic
-
-```
-AI_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
-```
-
-เปลี่ยนโมเดลได้ด้วย `GEMINI_MODEL` (ค่าเริ่มต้น `gemini-3.5-flash`)
-หรือ `ANTHROPIC_MODEL` (ค่าเริ่มต้น `claude-haiku-4-5`)
-
+โมเดลที่ใช้คือ `gemini-3.5-flash` เปลี่ยนได้โดยใส่ `GEMINI_MODEL` ใน `.env`
 ดูว่า key ของคุณใช้โมเดลไหนได้บ้าง:
 
 ```bash
@@ -54,7 +42,7 @@ ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxx
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `app.py` | เซิร์ฟเวอร์ Flask, system prompt, เชื่อม Gemini/Claude API และ LINE webhook |
+| `app.py` | เซิร์ฟเวอร์ Flask, system prompt, เชื่อม Gemini API และ LINE webhook |
 | `knowledge_base.py` | โหลด CSV และค้นหาหัวข้อที่ตรงกับคำถาม เพื่อแนบไปกับ prompt |
 | `knowledge/*.md` | คลังความรู้ SQL (รองรับ `.csv` ด้วย) |
 | `tools_pdf_to_md.py` | เครื่องมือแปลงคู่มือ PDF เป็น Markdown |
@@ -123,10 +111,8 @@ Vercel ตรวจจับ Flask ให้อัตโนมัติ เพ�
 
    | ตัวแปร | จำเป็น |
    |---|---|
-   | `GEMINI_API_KEY` | ใช่ (ถ้าใช้ Gemini) |
-   | `ANTHROPIC_API_KEY` | ใช่ (ถ้าใช้ Anthropic) |
-   | `AI_PROVIDER` | ไม่ (ระบบเลือกจาก key ที่มี) |
-   | `GEMINI_MODEL` / `ANTHROPIC_MODEL` | ไม่ |
+   | `GEMINI_API_KEY` | ใช่ |
+   | `GEMINI_MODEL` | ไม่ (ค่าเริ่มต้น `gemini-3.5-flash`) |
    | `LINE_CHANNEL_ACCESS_TOKEN` | เฉพาะตอนใช้ LINE |
    | `LINE_CHANNEL_SECRET` | เฉพาะตอนใช้ LINE |
 
