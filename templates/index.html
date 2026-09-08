@@ -229,6 +229,30 @@
       *, *::after { animation: none !important; transition: none !important; }
       .stream { scroll-behavior: auto; }
     }
+    .topbar { backdrop-filter: blur(18px); border-bottom: 1px solid var(--line); }
+    .composer { box-shadow: 0 12px 40px #00000018; transition: box-shadow .2s, transform .2s; }
+    .composer:focus-within { box-shadow: 0 0 0 2px #8885, 0 12px 40px #00000018; }
+    .turn { animation: arrive .22s ease-out; }
+    .turn-tools { opacity: 1; }
+    .body { overflow-wrap: anywhere; }
+    .body a { color: inherit; text-underline-offset: 4px; }
+    .source-badge { font-size: 11px; border: 1px solid var(--line); padding: 5px 10px; border-radius: 20px; white-space: nowrap; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid #999; outline-offset: 3px; }
+    @keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+    @media (max-width: 600px) { .source-badge { display: none; } .tool { min-height: 44px; } }
+    .knowledge-links { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+    .knowledge-links a { color:inherit; font-size:12px; padding:8px; border:1px solid #7775; border-radius:9px; text-decoration:none; }
+    .turn.user { animation:send-arrive .3s ease-out; }
+    .typing { align-items:center; gap:6px; }
+    .search-label { font-size:13px; margin-right:10px; opacity:.7; }
+    @keyframes send-arrive { from { opacity:0; transform:translateY(14px) scale(.98); } to { opacity:1; transform:none; } }
+    dialog { width:min(560px,90vw); max-height:75dvh; background:var(--bg); color:var(--fg); border:1px solid #8885; border-radius:20px; padding:24px; }
+    dialog::backdrop { background:#0008; backdrop-filter:blur(4px); }
+    #topicSearch { width:100%; padding:12px; margin:14px 0; border:1px solid #8885; border-radius:10px; background:transparent; color:inherit; }
+    #topicResults { display:grid; gap:8px; max-height:45dvh; overflow:auto; }
+    #topicResults button { text-align:left; white-space:normal; }
+    @media(prefers-reduced-motion:reduce) { .turn.user { animation:none; } }
   </style>
 </head>
 <body>
@@ -237,6 +261,8 @@
     <div class="brand"><div class="mark">SQL</div><div class="t">ครูเอสคิว</div></div>
     <div class="side-actions">
       <button class="btn solid block" onclick="newChat()">+ แชทใหม่</button>
+      <button class="btn block" onclick="openTopics()" style="margin-top:8px">⌕ สำรวจหัวข้อในชุดข้อมูล</button>
+      <div class="knowledge-links"><a href="/handbook.pdf" target="_blank" rel="noopener">คู่มือ PDF · 100 หน้า ↗</a><a href="/handbook.md">ดาวน์โหลด MD ↓</a></div>
     </div>
     <div class="side-label">ประวัติการสนทนา</div>
     <div class="chat-list" id="chatList"></div>
@@ -251,6 +277,8 @@
     <div class="topbar">
       <button class="btn icon menu-btn" onclick="toggleSidebar()" aria-label="เมนู">☰</button>
       <div class="title" id="chatTitle">แชทใหม่</div>
+      <span class="source-badge">คำตอบจากชุดข้อมูลเท่านั้น</span>
+      <button class="btn icon" onclick="exportChat()" title="ดาวน์โหลดบทสนทนา" aria-label="ดาวน์โหลดบทสนทนา">↓</button>
       <button class="btn icon" onclick="refreshChat()" title="โหลดใหม่">↻</button>
     </div>
 
@@ -265,7 +293,33 @@
     </div>
   </div>
 
+  <dialog id="topicDialog" aria-labelledby="topicTitle">
+    <button class="btn" onclick="document.getElementById('topicDialog').close()" style="float:right" aria-label="ปิด">×</button>
+    <h2 id="topicTitle">สำรวจชุดข้อมูล</h2>
+    <input id="topicSearch" type="search" placeholder="ค้นหาหัวข้อ เช่น JOIN, Transaction" aria-label="ค้นหาหัวข้อ">
+    <div id="topicResults"></div>
+  </dialog>
   <script>
+    let datasetTopics = [];
+    function paintTopics() {
+      const list = document.getElementById('topicResults');
+      list.replaceChildren();
+      const term = document.getElementById('topicSearch').value.toLowerCase();
+      datasetTopics.filter(t=>t.toLowerCase().includes(term)).forEach(topic=>{
+        const button=document.createElement('button'); button.className='btn'; button.textContent=topic;
+        button.onclick=()=>{ document.getElementById('topicDialog').close(); toggleSidebar(false); ask(topic,false); };
+        list.appendChild(button);
+      });
+      if (!list.childElementCount) list.textContent='ไม่พบหัวข้อที่ตรงกัน';
+    }
+    async function openTopics() {
+      if (busy) return;
+      document.getElementById('topicDialog').showModal();
+      document.getElementById('topicResults').textContent='กำลังโหลดหัวข้อ…';
+      try { const res=await fetch('/knowledge/topics'); if(!res.ok) throw Error(); datasetTopics=await res.json(); paintTopics(); }
+      catch { document.getElementById('topicResults').textContent='โหลดหัวข้อไม่สำเร็จ กรุณาปิดแล้วลองใหม่'; }
+    }
+    document.getElementById('topicSearch').addEventListener('input',paintTopics);
     const input = document.getElementById("input");
     const turns = document.getElementById("turns");
     const stream = document.getElementById("stream");
@@ -326,7 +380,8 @@
     function inline(text) {
       return escapeHtml(text)
         .replace(/`([^`]+)`/g, '<code class="inline">$1</code>')
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/https:\/\/[^\s<>]+/g, url => '<a href="' + url + '" target="_blank" rel="noopener noreferrer">อ่านเอกสารต้นทาง ↗</a>');
     }
 
     function renderTable(rows) {
@@ -492,21 +547,29 @@
     }
 
     /* ================= การกระทำ ================= */
-    function openChat(id) { state.activeId = id; save(); paint(); toggleSidebar(false); }
+    function exportChat() {
+      const blob = new Blob([JSON.stringify(current() || {}, null, 2)], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'sql-chat.json'; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    function openChat(id) { if (busy) return; state.activeId = id; save(); paint(); toggleSidebar(false); }
 
     function newChat() {
+      if (busy) return;
       state.activeId = newId(); save(); paint(); toggleSidebar(false);
       if (!isTouch) input.focus();
     }
 
     function removeChat(id) {
+      if (busy) return;
       delete state.chats[id];
       fetch("/chats/" + id, { method: "DELETE" }).catch(() => {});
       if (id === state.activeId) state.activeId = newId();
       save(); paint();
     }
 
-    function refreshChat() { load(); paint(); }
+    function refreshChat() { if (busy) return; load(); paint(); }
 
     function toggleSidebar(force) {
       const el = document.getElementById("sidebar");
@@ -566,6 +629,7 @@
     }
 
     async function ask(text, replaceLast) {
+      if (busy) return;
       const id = state.activeId;
       const c = current();
       let history = c && c.history ? c.history.slice() : [];
@@ -576,7 +640,7 @@
 
       const el = document.createElement("div");
       el.className = "turn bot";
-      el.innerHTML = '<div class="who">ครูเอสคิว</div><div class="typing"><i></i><i></i><i></i></div>';
+      el.innerHTML = '<div class="who">ครูเอสคิว</div><div class="typing" role="status" aria-live="polite"><span class="search-label">กำลังค้นหาชุดข้อมูล…</span><i></i><i></i><i></i></div>';
       turns.appendChild(el); toBottom();
 
       setBusy(true);
@@ -587,7 +651,7 @@
         const res = await fetch("/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, history, chat_id: id }),
+          body: JSON.stringify({ message: text, history: history.slice(-30), chat_id: id }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) throw new Error("bad response");
@@ -599,7 +663,7 @@
         let started = false, pending = false;
 
         const draw = () => {
-          body.innerHTML = renderMarkdown(reply) + '<span class="caret"></span>';
+          body.innerHTML = renderMarkdown(reply) + (busy ? '<span class="caret"></span>' : '');
           toBottom();
           pending = false;
         };
@@ -631,10 +695,10 @@
         setBusy(false);
       }
 
-      addTools(el, reply, () => ask(text, true));
+      addTools(el, reply, null);
       history.push({ role: "user", content: text });
       history.push({ role: "assistant", content: reply });
-      touch(id, history.slice(-30));   // ให้ตรงกับ MAX_HISTORY ฝั่งเซิร์ฟเวอร์
+      touch(id, history);
       document.getElementById("chatTitle").textContent = state.chats[id].title;
       paintList();
       if (!isTouch) input.focus();

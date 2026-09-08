@@ -1,0 +1,143 @@
+{
+  "source_pdf_sha256": "2b740a4931709ca2c8391a8500dbdb75ed1d2e7f8cc74bda58e0f68cd8b349cc",
+  "source_text_sha256": "a3f4b5b95e2f45a2dadfc9fcc0b5118e6134df847ee20ff7bddb12e75f5d0ae5",
+  "source_pages": 72,
+  "original_sections": 73,
+  "added_sections": 26,
+  "expected_pages": 100,
+  "topics": [
+    {
+      "title": "CTE WITH (คิวรีมีชื่อ)",
+      "page": 74,
+      "url": "https://www.postgresql.org/docs/current/queries-with.html"
+    },
+    {
+      "title": "Recursive CTE (คิวรีเรียกซ้ำ)",
+      "page": 75,
+      "url": "https://www.postgresql.org/docs/current/queries-with.html"
+    },
+    {
+      "title": "Window Functions ROW_NUMBER OVER PARTITION BY (ฟังก์ชันหน้าต่าง)",
+      "page": 76,
+      "url": "https://www.postgresql.org/docs/current/tutorial-window.html"
+    },
+    {
+      "title": "Transaction Isolation MVCC (ระดับการแยกธุรกรรม)",
+      "page": 77,
+      "url": "https://www.postgresql.org/docs/current/transaction-iso.html"
+    },
+    {
+      "title": "SQL Injection Prepared Statements (ป้องกันการแทรกคำสั่ง)",
+      "page": 78,
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html"
+    },
+    {
+      "title": "Normalization 1NF 2NF 3NF (การออกแบบลดความซ้ำซ้อน)",
+      "page": 79,
+      "url": "https://learn.microsoft.com/en-us/previous-versions/troubleshoot/microsoft-365/microsoft-365-apps/access/database-normalization-description"
+    },
+    {
+      "title": "EXPLAIN Query Plan (วิเคราะห์แผนคิวรี)",
+      "page": 80,
+      "url": "https://www.postgresql.org/docs/current/using-explain.html"
+    },
+    {
+      "title": "Index Performance (ประสิทธิภาพดัชนี)",
+      "page": 81,
+      "url": "https://www.postgresql.org/docs/current/indexes.html"
+    },
+    {
+      "title": "Partitioning (แบ่งตาราง)",
+      "page": 82,
+      "url": "https://www.postgresql.org/docs/current/ddl-partitioning.html"
+    },
+    {
+      "title": "JSON JSONB (ข้อมูลกึ่งโครงสร้าง)",
+      "page": 83,
+      "url": "https://www.postgresql.org/docs/current/functions-json.html"
+    },
+    {
+      "title": "Backup Restore PITR (สำรองและกู้คืน)",
+      "page": 84,
+      "url": "https://www.postgresql.org/docs/current/backup.html"
+    },
+    {
+      "title": "Replication Standby (ทำสำเนาฐานข้อมูล)",
+      "page": 85,
+      "url": "https://www.postgresql.org/docs/current/warm-standby.html"
+    },
+    {
+      "title": "Row Level Security RLS (สิทธิ์ระดับแถว)",
+      "page": 86,
+      "url": "https://www.postgresql.org/docs/current/ddl-rowsecurity.html"
+    },
+    {
+      "title": "CREATE VIEW (ตารางเสมือน)",
+      "page": 87,
+      "url": "https://www.postgresql.org/docs/current/sql-createview.html"
+    },
+    {
+      "title": "Identity AUTO INCREMENT (เลขอัตโนมัติ)",
+      "page": 88,
+      "url": "https://www.postgresql.org/docs/current/ddl-identity-columns.html"
+    },
+    {
+      "title": "Subquery EXISTS NOT IN NULL (คิวรีย่อยและค่าว่าง)",
+      "page": 89,
+      "url": "https://www.postgresql.org/docs/current/functions-subquery.html"
+    },
+    {
+      "title": "Transaction BEGIN COMMIT ROLLBACK SAVEPOINT (ธุรกรรมและจุดย้อนกลับ)",
+      "page": 90,
+      "url": "https://www.postgresql.org/docs/current/tutorial-transactions.html"
+    },
+    {
+      "title": "Locking Deadlock (การล็อกและเดดล็อก)",
+      "page": 91,
+      "url": "https://www.postgresql.org/docs/current/explicit-locking.html"
+    },
+    {
+      "title": "Roles GRANT REVOKE (บทบาทและสิทธิ์)",
+      "page": 92,
+      "url": "https://www.postgresql.org/docs/current/user-manag.html"
+    },
+    {
+      "title": "Date Time Timestamp Timezone (วันเวลาและเขตเวลา)",
+      "page": 93,
+      "url": "https://www.postgresql.org/docs/current/datatype-datetime.html"
+    },
+    {
+      "title": "Materialized View REFRESH (ผลลัพธ์ที่จัดเก็บไว้)",
+      "page": 94,
+      "url": "https://www.postgresql.org/docs/current/rules-materializedviews.html"
+    },
+    {
+      "title": "Trigger BEFORE AFTER (การทำงานตามเหตุการณ์)",
+      "page": 95,
+      "url": "https://www.postgresql.org/docs/current/trigger-definition.html"
+    },
+    {
+      "title": "UPSERT ON CONFLICT (เพิ่มหรือปรับข้อมูลเมื่อชนคีย์)",
+      "page": 96,
+      "url": "https://www.postgresql.org/docs/current/sql-insert.html"
+    },
+    {
+      "title": "NoSQL Document Modeling (ออกแบบฐานข้อมูลเอกสาร)",
+      "page": 97,
+      "url": "https://www.mongodb.com/docs/manual/data-modeling/"
+    },
+    {
+      "title": "Sharding Shard Key (กระจายข้อมูลข้ามเครื่อง)",
+      "page": 98,
+      "url": "https://www.mongodb.com/docs/manual/sharding/"
+    },
+    {
+      "title": "Schema Migration ALTER TABLE (เปลี่ยนโครงสร้างข้อมูล)",
+      "page": 99,
+      "url": "https://www.postgresql.org/docs/current/ddl-alter.html"
+    }
+  ],
+  "pdf_sha256": "56608b403781d185668d1a4e9d72d83dc813af298d8cff8512bfc6e5da1e917f",
+  "markdown_sha256": "eeb5a1bca1c959a1c0578dd012bbf51b02a0e9eb342d1110882987acf66ccfdd",
+  "validation": "100 pages; 72 source pages text-identical; all pages contain selectable text"
+}

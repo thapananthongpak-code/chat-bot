@@ -89,7 +89,7 @@ _MD_FENCE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.S)
 def _md_code(text):
     """ดึงเนื้อในบล็อกโค้ด ```...``` ถ้าไม่มีก็ใช้ข้อความดิบ"""
     m = _MD_FENCE.search(text)
-    return (m.group(1) if m else text).strip()
+    return "\n\n".join(_MD_FENCE.findall(text)).strip() if m else _md_prose(text)
 
 
 def _md_prose(text):
@@ -124,6 +124,7 @@ def _load_md(path):
             "syntax": _clean(syntax),
             "example": _clean(example),
             "source": os.path.basename(path),
+            "references": _md_prose(named.get("แหล่งอ้างอิง", "")),
         })
     return entries
 
@@ -133,6 +134,9 @@ def load_entries():
     if not os.path.isdir(KNOWLEDGE_DIR):
         return entries
     for filename in sorted(os.listdir(KNOWLEDGE_DIR)):
+        # The handbook contains all legacy and supplemental material; avoid duplicates.
+        if os.path.isfile(os.path.join(KNOWLEDGE_DIR, "sql_handbook_th.md")) and filename != "sql_handbook_th.md":
+            continue
         lower = filename.lower()
         if lower.endswith(".csv"):
             entries.extend(_load_file(os.path.join(KNOWLEDGE_DIR, filename)))
@@ -173,12 +177,10 @@ def _score(entry, words, grams, is_definition=False):
     topic = entry["topic"].lower()
     score = 0.0
     # ถ้าผู้ใช้ถามเชิงนิยาม ให้หัวข้อทฤษฎี ("... คืออะไร?") ขึ้นก่อนหัวข้อคำสั่ง
-    if is_definition and "คืออะไร" in topic:
-        score += 2.5
     for word in words:
-        if word in topic:
+        if re.search(r"\b" + re.escape(word) + r"\b", topic):
             score += 10.0
-        elif word in entry["_haystack"]:
+        elif re.search(r"\b" + re.escape(word) + r"\b", entry["_haystack"]):
             score += 2.0
     if grams:
         topic_hits = sum(1 for g in grams if g in topic)
@@ -189,7 +191,7 @@ def _score(entry, words, grams, is_definition=False):
     return score
 
 
-def search(query, limit=6, min_score=1.0):
+def _legacy_search(query, limit=6, min_score=1.0):
     """คืนรายการหัวข้อที่เกี่ยวข้องกับคำถามมากที่สุด"""
     if not query or not ENTRIES:
         return []
@@ -206,7 +208,7 @@ def search(query, limit=6, min_score=1.0):
         return strong[:limit]
     # ไม่มีหัวข้อไหนถึงเกณฑ์ แต่ยังพอมีที่เกี่ยวข้องบ้าง — ส่งอันที่ใกล้ที่สุดให้โมเดลตัดสินเอง
     # กันคำถาม SQL จริง ๆ ที่ใช้คำไม่ตรงกับในไฟล์ โดนปฏิเสธทั้งที่ตอบได้
-    return [e for _, e in ranked[:3]]
+    return []
 
 
 # บอกให้ชัดว่าช่องไหนไม่มีข้อมูล ไม่งั้นโมเดลจะเข้าใจว่าไม่ได้ส่งมาแล้วแต่งเติมเอง
@@ -228,3 +230,52 @@ def format_entries(entries):
 def topic_index():
     """รายชื่อหัวข้อทั้งหมดในคลังความรู้ ใช้บอกขอบเขตที่ตอบได้"""
     return " | ".join(e["topic"] for e in ENTRIES)
+
+
+def search(query, limit=6, min_score=1.0):
+    """Require topic evidence; never promote an unrelated definition or body match."""
+    text = query.lower().strip()
+    words = set(_WORD_RE.findall(text)) - _STOPWORDS - {"function", "use", "explain", "does"}
+    words |= _alias_words(text)
+    if re.search(r"(?:what is sql|sql คืออะไร|ภาษา sql)", text):
+        return [e for e in ENTRIES if e["topic"] in ("SQL คืออะไร", "ภาษา SQL คืออะไร")][:1]
+    grams = _thai_ngrams(text)
+    ranked = []
+    for e in ENTRIES:
+        topic = e["topic"].lower()
+        tokens = set(_WORD_RE.findall(topic))
+        hits = words & tokens
+        thai = _thai_ngrams(topic)
+        overlap = len(grams & thai) / max(1, len(grams))
+        if not hits and not (len(grams & thai) >= 3 and overlap >= .45):
+            continue
+        score = 10 * len(hits) + overlap * 8
+        if words and hits:
+            score += 5 * len(hits) / len(words)
+        ranked.append((score, e))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    if not ranked:
+        return []
+    return [e for score, e in ranked if score >= max(min_score, ranked[0][0] * .7)][:limit]
+
+
+def answer_from_dataset(history):
+    """No generated prose: render only stored fields, with traceable provenance."""
+    questions = [m["content"] for m in history if m.get("role") == "user"]
+    query = questions[-1] if questions else ""
+    entries = search(query, limit=2)
+    if not entries and len(questions) > 1 and query.startswith(("แล้ว", "ขอตัวอย่าง", "อธิบายต่อ")):
+        entries = search(questions[-2] + " " + query, limit=2)
+    if not entries:
+        return "ไม่พบข้อมูลที่ตรงกับคำถามในชุดข้อมูลครับ ลองระบุชื่อคำสั่งหรือหัวข้อฐานข้อมูลให้ชัดเจนขึ้น"
+    blocks = []
+    for e in entries:
+        parts = ["## " + e["topic"], e["description"]]
+        for key, label in (("syntax", "รูปแบบคำสั่ง"), ("example", "ตัวอย่างจากชุดข้อมูล")):
+            if e[key]:
+                parts.append("### " + label + "\n```sql\n" + e[key] + "\n```")
+        parts.append("แหล่งข้อมูล: " + e["source"] + " · " + e["topic"])
+        refs = e.get("references", "")
+        parts.append(refs or "ต้นฉบับ: คู่มือ PDF ที่ผู้ใช้จัดเตรียม (ยังไม่มี URL แหล่งตีพิมพ์)")
+        blocks.append("\n\n".join(parts))
+    return "\n\n---\n\n".join(blocks)

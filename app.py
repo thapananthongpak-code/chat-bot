@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context
+from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context, send_file
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -19,14 +19,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 # อยากได้คำตอบละเอียดกว่านี้ เปลี่ยนเป็น gemini-3.5-flash ใน .env ได้
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 
-if not GEMINI_API_KEY:
-    print("[!] ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env — บอทจะตอบไม่ได้ "
-          "(ขอ key ฟรีที่ https://aistudio.google.com/apikey)")
+# Dataset answers do not require a model key.
 
 # สร้าง client ครั้งเดียวตอนเริ่ม ถ้าสร้างใหม่ทุกคำขอจะโดนปิดตัวเองระหว่างทาง
 gemini = genai.Client(api_key=GEMINI_API_KEY or "missing-key")
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET"))
+handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET") or "disabled-local-web-only")
 
 # บน Vercel ระบบไฟล์เป็น read-only ยกเว้น /tmp การเขียนที่อื่นจะทำให้แอปพังตั้งแต่ import
 ON_SERVERLESS = bool(os.getenv("VERCEL"))
@@ -189,6 +187,8 @@ def save_line_history(user_id, history):
 
 def clean_history(raw):
     """กรองประวัติที่รับมาจากเบราว์เซอร์ ให้เหลือเฉพาะรูปแบบที่ API ยอมรับ"""
+    if not isinstance(raw, list):
+        return []
     return [
         {"role": m.get("role"), "content": str(m.get("content") or "")[:8000]}
         for m in (raw or [])[-MAX_HISTORY:]
@@ -273,69 +273,45 @@ def explain_error(exc):
 
 
 def stream_reply(history, system=SYSTEM_PROMPT):
-    """ทยอยส่งคำตอบทีละส่วน ผู้ใช้จะเห็นตัวอักษรไหลออกมาแทนการรอหน้าจอเปล่า"""
-    ready, fallback = prepare(history, system)
-    if fallback is not None:
-        yield fallback
-        return
-    contents, config = ready
-    try:
-        got = False
-        for chunk in gemini.models.generate_content_stream(
-            model=GEMINI_MODEL, contents=contents, config=config
-        ):
-            if chunk.text:
-                got = True
-                yield chunk.text
-        if not got:
-            yield "ขออภัยครับ ผมตอบคำถามนี้ไม่ได้ ลองถามใหม่อีกแบบได้ไหมครับ"
-    except Exception as exc:
-        yield explain_error(exc)
+    """Extract stored content without a generative model."""
+    yield kb.answer_from_dataset(history)
 
 
 def chat_with_ai(history, system=SYSTEM_PROMPT):
-    ready, fallback = prepare(history, system)
-    if fallback is not None:
-        return fallback
-    contents, config = ready
-    try:
-        response = gemini.models.generate_content(
-            model=GEMINI_MODEL, contents=contents, config=config
-        )
-    except Exception as exc:
-        return explain_error(exc)
-
-    text = (response.text or "").strip()
-    if text:
-        return text
-    # Gemini คืนข้อความว่างได้เมื่อโดนตัวกรองความปลอดภัยหรือชนเพดาน token
-    print(f"[!] Gemini คืนข้อความว่าง: {getattr(response, 'prompt_feedback', None)}")
-    return "ขออภัยครับ ผมตอบคำถามนี้ไม่ได้ ลองถามใหม่อีกแบบได้ไหมครับ"
-
-
-def _fail_message(exc):
-    if app.debug:  # ตอน dev แสดงสาเหตุจริงในแชตเลย จะได้ไม่ต้องไล่หาใน terminal
-        return f"เรียก AI ไม่สำเร็จครับ\n\n{type(exc).__name__}: {exc}"
-    return "ขออภัยครับ ตอนนี้เชื่อมต่อ AI ไม่ได้ ลองใหม่อีกครั้งนะครับ"
+    return kb.answer_from_dataset(history)
 
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
+@app.get("/handbook.pdf")
+def handbook_pdf():
+    return send_file(os.path.join(app.root_path, "output/pdf/sql_database_handbook_100p_th.pdf"), mimetype="application/pdf")
+
+@app.get("/handbook.md")
+def handbook_markdown():
+    return send_file(os.path.join(kb.KNOWLEDGE_DIR, "sql_handbook_th.md"), as_attachment=True)
+
+@app.get("/knowledge/topics")
+def knowledge_topics():
+    return jsonify([entry["topic"] for entry in kb.ENTRIES])
+
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
     """ส่งคำตอบแบบทยอยทีละส่วน ให้ผู้ใช้เห็นตัวอักษรไหลออกมาทันที
     ใช้ text/plain แบบ chunked ไม่ต้องพึ่ง SSE ให้ยุ่งยาก"""
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
+        return jsonify({"error": "ข้อความต้องเป็นข้อความตัวอักษร"}), 400
     user_message = (payload.get("message") or "").strip()
     if not user_message:
         return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
 
     chat_id = (payload.get("chat_id") or "").strip()
-    saved = load_web_chat(chat_id)
+    saved = None
     name = (payload.get("name") or "").strip()[:30] or (saved.get("name") if saved else "")
-    history = (saved.get("history") or []) if saved else clean_history(payload.get("history"))
+    history = clean_history(payload.get("history"))
     history = history + [{"role": "user", "content": user_message}]
 
     system = SYSTEM_PROMPT
