@@ -5,7 +5,6 @@ const fs=require('fs');
  const page=await browser.newPage({viewport:{width:390,height:844}});
  await page.route('http://handbook.test/**',async route=>{
    const url=route.request().url();
-   if(url.endsWith('/knowledge/topics')) return route.fulfill({json:['CTE WITH','UPSERT ON CONFLICT']});
    if(url.endsWith('/chat/stream')) { await new Promise(r=>setTimeout(r,300)); return route.fulfill({body:'## CTE WITH\n\nข้อมูลจากชุดข้อมูล',contentType:'text/plain'}); }
    return route.fulfill({body:fs.readFileSync('templates/index.html','utf8'),contentType:'text/html'});
  });
@@ -17,14 +16,9 @@ const fs=require('fs');
  await page.reload();
  await page.getByText('ข้อมูลจากชุดข้อมูล',{exact:true}).waitFor();
  if(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth)) throw Error('Horizontal overflow');
- await page.screenshot({path:'tmp/pdfs/chat-mobile.png',fullPage:true});
- await page.locator('.menu-btn').click();
- await page.getByText('⌕ สำรวจหัวข้อในชุดข้อมูล').click();
- await page.locator('#topicSearch').fill('UPSERT');
- await page.getByRole('button',{name:'UPSERT ON CONFLICT',exact:true}).waitFor();
- await page.getByRole('button',{name:'ปิด',exact:true}).click();
+ await page.screenshot({path:'tmp/chat-mobile.png',fullPage:true});
  await page.setViewportSize({width:1440,height:900});
- await page.screenshot({path:'tmp/pdfs/chat-desktop.png',fullPage:true});
- console.log('PASS: search status, answer, refresh persistence, mobile overflow, topic filter');
+ await page.screenshot({path:'tmp/chat-desktop.png',fullPage:true});
+ console.log('PASS: search status, answer, refresh persistence, mobile overflow');
  await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

@@ -241,17 +241,10 @@
     @keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
     @media (max-width: 600px) { .source-badge { display: none; } .tool { min-height: 44px; } }
-    .knowledge-links { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
-    .knowledge-links a { color:inherit; font-size:12px; padding:8px; border:1px solid #7775; border-radius:9px; text-decoration:none; }
     .turn.user { animation:send-arrive .3s ease-out; }
     .typing { align-items:center; gap:6px; }
     .search-label { font-size:13px; margin-right:10px; opacity:.7; }
     @keyframes send-arrive { from { opacity:0; transform:translateY(14px) scale(.98); } to { opacity:1; transform:none; } }
-    dialog { width:min(560px,90vw); max-height:75dvh; background:var(--bg); color:var(--fg); border:1px solid #8885; border-radius:20px; padding:24px; }
-    dialog::backdrop { background:#0008; backdrop-filter:blur(4px); }
-    #topicSearch { width:100%; padding:12px; margin:14px 0; border:1px solid #8885; border-radius:10px; background:transparent; color:inherit; }
-    #topicResults { display:grid; gap:8px; max-height:45dvh; overflow:auto; }
-    #topicResults button { text-align:left; white-space:normal; }
     @media(prefers-reduced-motion:reduce) { .turn.user { animation:none; } }
   </style>
 </head>
@@ -261,8 +254,6 @@
     <div class="brand"><div class="mark">SQL</div><div class="t">ครูเอสคิว</div></div>
     <div class="side-actions">
       <button class="btn solid block" onclick="newChat()">+ แชทใหม่</button>
-      <button class="btn block" onclick="openTopics()" style="margin-top:8px">⌕ สำรวจหัวข้อในชุดข้อมูล</button>
-      <div class="knowledge-links"><a href="/handbook.pdf" target="_blank" rel="noopener">คู่มือ PDF · {{ handbook_pages }} หน้า ↗</a><a href="/handbook.md">ดาวน์โหลด MD ↓</a></div>
     </div>
     <div class="side-label">ประวัติการสนทนา</div>
     <div class="chat-list" id="chatList"></div>
@@ -293,33 +284,7 @@
     </div>
   </div>
 
-  <dialog id="topicDialog" aria-labelledby="topicTitle">
-    <button class="btn" onclick="document.getElementById('topicDialog').close()" style="float:right" aria-label="ปิด">×</button>
-    <h2 id="topicTitle">สำรวจชุดข้อมูล</h2>
-    <input id="topicSearch" type="search" placeholder="ค้นหาหัวข้อ เช่น JOIN, Transaction" aria-label="ค้นหาหัวข้อ">
-    <div id="topicResults"></div>
-  </dialog>
   <script>
-    let datasetTopics = [];
-    function paintTopics() {
-      const list = document.getElementById('topicResults');
-      list.replaceChildren();
-      const term = document.getElementById('topicSearch').value.toLowerCase();
-      datasetTopics.filter(t=>t.toLowerCase().includes(term)).forEach(topic=>{
-        const button=document.createElement('button'); button.className='btn'; button.textContent=topic;
-        button.onclick=()=>{ document.getElementById('topicDialog').close(); toggleSidebar(false); ask(topic,false); };
-        list.appendChild(button);
-      });
-      if (!list.childElementCount) list.textContent='ไม่พบหัวข้อที่ตรงกัน';
-    }
-    async function openTopics() {
-      if (busy) return;
-      document.getElementById('topicDialog').showModal();
-      document.getElementById('topicResults').textContent='กำลังโหลดหัวข้อ…';
-      try { const res=await fetch('/knowledge/topics'); if(!res.ok) throw Error(); datasetTopics=await res.json(); paintTopics(); }
-      catch { document.getElementById('topicResults').textContent='โหลดหัวข้อไม่สำเร็จ กรุณาปิดแล้วลองใหม่'; }
-    }
-    document.getElementById('topicSearch').addEventListener('input',paintTopics);
     const input = document.getElementById("input");
     const turns = document.getElementById("turns");
     const stream = document.getElementById("stream");

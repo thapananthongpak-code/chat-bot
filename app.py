@@ -1,10 +1,11 @@
-from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context, send_file
+from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context
 from dotenv import load_dotenv
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
-import os, json, re
+import os, json, re, hmac
+import urllib.request
 from datetime import datetime, timezone
 
 import knowledge_base as kb
@@ -15,6 +16,8 @@ app = Flask(__name__)
 # Dataset-only mode: no generative client, prompt, or environment override.
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET") or "disabled-local-web-only")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 
 # บน Vercel ระบบไฟล์เป็น read-only ยกเว้น /tmp การเขียนที่อื่นจะทำให้แอปพังตั้งแต่ import
 ON_SERVERLESS = bool(os.getenv("VERCEL"))
@@ -72,8 +75,8 @@ def save_web_chat(chat_id, name, history):
         return False
 
 
-def load_line_history(user_id):
-    path = os.path.join(DATA_DIR, f"line_{user_id}.json")
+def load_line_history(user_id, prefix="line"):
+    path = os.path.join(DATA_DIR, f"{prefix}_{user_id}.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -81,8 +84,8 @@ def load_line_history(user_id):
         # ไม่มีไฟล์ อ่านไม่ได้ หรือไฟล์เสีย — เริ่มบทสนทนาใหม่ ดีกว่าปล่อยให้ 500
         return []
 
-def save_line_history(user_id, history):
-    path = os.path.join(DATA_DIR, f"line_{user_id}.json")
+def save_line_history(user_id, history, prefix="line"):
+    path = os.path.join(DATA_DIR, f"{prefix}_{user_id}.json")
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(history[-MAX_HISTORY:], f, ensure_ascii=False, indent=2)
@@ -111,19 +114,7 @@ def chat_with_ai(history, system=None):
 
 @app.route("/")
 def index():
-    return render_template("index.html", handbook_pages=kb.DOCUMENT_META.get("expected_pages", "—"))
-
-@app.get("/handbook.pdf")
-def handbook_pdf():
-    return send_file(os.path.join(app.root_path, "output/pdf/sql_database_handbook_th.pdf"), mimetype="application/pdf")
-
-@app.get("/handbook.md")
-def handbook_markdown():
-    return send_file(os.path.join(kb.KNOWLEDGE_DIR, "sql_handbook_th.md"), as_attachment=True)
-
-@app.get("/knowledge/topics")
-def knowledge_topics():
-    return jsonify([entry["topic"] for entry in kb.ENTRIES])
+    return render_template("index.html")
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
@@ -206,6 +197,47 @@ def handle_message(event):
             reply_token=event.reply_token,
             messages=[TextMessage(text=to_line_text(reply))]
         ))
+
+TELEGRAM_WELCOME = ("สวัสดีครับ ผมครูเอสคิว ถามเรื่อง SQL และฐานข้อมูลได้เลย "
+                    "เช่น LEFT JOIN, GROUP BY, Transaction คำตอบมาจากคู่มือ 126 หน้าครับ")
+
+
+def telegram_send(chat_id, text):
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        data=json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10).close()
+    except OSError as exc:
+        print(f"[!] ส่งข้อความ Telegram ไม่ได้: {exc}")
+
+
+@app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    # ต้องตั้งทั้ง token และ secret — ไม่งั้นใครก็ยิงเข้ามาสั่งบอทส่งข้อความได้
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_WEBHOOK_SECRET:
+        abort(404)
+    given = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not hmac.compare_digest(given, TELEGRAM_WEBHOOK_SECRET):
+        abort(403)
+    message = (request.get_json(silent=True) or {}).get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
+    text = (message.get("text") or "").strip()
+    if not isinstance(chat_id, int) or not text:
+        return "OK", 200  # สติกเกอร์ รูป หรือ update ชนิดอื่น — ข้ามไป
+    if text.startswith("/start"):
+        telegram_send(chat_id, TELEGRAM_WELCOME)
+        return "OK", 200
+    history = load_line_history(chat_id, prefix="tg")
+    history.append({"role": "user", "content": text[:4000]})
+    reply = chat_with_ai(history)
+    history.append({"role": "assistant", "content": reply})
+    save_line_history(chat_id, history, prefix="tg")
+    telegram_send(chat_id, to_line_text(reply)[:4000])  # Telegram รับได้ไม่เกิน 4096 ตัวอักษร
+    return "OK", 200
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=5001)

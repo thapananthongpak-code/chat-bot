@@ -7,14 +7,11 @@ with patch('dotenv.load_dotenv', return_value=False):
 
 
 class HandbookRoutes(unittest.TestCase):
-    def test_downloads_and_catalog(self):
+    def test_home_page_without_removed_resources(self):
         with application.app.test_client() as client:
-            for path in ['/', '/handbook.pdf', '/handbook.md']:
-                response = client.get(path)
-                self.assertEqual(response.status_code, 200)
-                response.close()
-            self.assertEqual(len(client.get('/knowledge/topics').json), 123)
-            self.assertIn('126 หน้า', client.get('/').get_data(as_text=True))
+            self.assertEqual(client.get('/').status_code, 200)
+            for path in ['/handbook.pdf', '/handbook.md', '/knowledge/topics']:
+                self.assertEqual(client.get(path).status_code, 404)
 
     def test_dataset_answer(self):
         with application.app.test_client() as client, patch.object(application, 'save_web_chat'):
