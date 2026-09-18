@@ -3,8 +3,13 @@
 import csv
 import os
 import re
+import hashlib
+import json
 
 KNOWLEDGE_DIR = os.path.join(os.path.dirname(__file__), "knowledge")
+MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "output/pdf/manifest.json")
+DATASET_ERROR = ""
+DOCUMENT_META = {}
 
 # คอลัมน์ในไฟล์ CSV: หัวข้อ (Topic), คำอธิบาย (Description), คำสั่ง SQL (Syntax), ตัวอย่าง (Example)
 _EMPTY = {"", "-", "–", "—"}
@@ -103,7 +108,8 @@ def _load_md(path):
     """อ่านไฟล์ Markdown ตามข้อตกลง:
     `## หัวข้อ` = 1 หัวข้อ, ข้อความถัดมา = คำอธิบาย,
     `### รูปแบบคำสั่ง` = Syntax, `### ตัวอย่าง` = Example"""
-    raw = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as f:
+        raw = f.read()
     parts = re.split(r"^##[ \t]+(?!#)(.+?)[ \t]*$", raw, flags=re.M)
     entries = []
     for i in range(1, len(parts) - 1, 2):
@@ -130,18 +136,27 @@ def _load_md(path):
 
 
 def load_entries():
-    entries = []
-    if not os.path.isdir(KNOWLEDGE_DIR):
-        return entries
-    for filename in sorted(os.listdir(KNOWLEDGE_DIR)):
-        # The handbook contains all legacy and supplemental material; avoid duplicates.
-        if os.path.isfile(os.path.join(KNOWLEDGE_DIR, "sql_handbook_th.md")) and filename != "sql_handbook_th.md":
-            continue
-        lower = filename.lower()
-        if lower.endswith(".csv"):
-            entries.extend(_load_file(os.path.join(KNOWLEDGE_DIR, filename)))
-        elif lower.endswith(".md"):
-            entries.extend(_load_md(os.path.join(KNOWLEDGE_DIR, filename)))
+    """Fail closed: only load the verified handbook, never legacy files or a model."""
+    global DATASET_ERROR, DOCUMENT_META
+    DATASET_ERROR, DOCUMENT_META = "", {}
+    path = os.path.join(KNOWLEDGE_DIR, "sql_handbook_th.md")
+    try:
+        with open(MANIFEST_PATH, encoding="utf-8") as f:
+            manifest = json.load(f)
+        for target, expected in (
+            (path, manifest["markdown_sha256"]),
+            (os.path.join(os.path.dirname(MANIFEST_PATH), "sql_database_handbook_th.pdf"), manifest["pdf_sha256"]),
+        ):
+            with open(target, "rb") as f:
+                if hashlib.sha256(f.read()).hexdigest() != expected:
+                    raise ValueError("Handbook checksum mismatch")
+        entries = _load_md(path)
+        if len(entries) != manifest["topic_count"]:
+            raise ValueError("Handbook topic count mismatch")
+        DOCUMENT_META = manifest
+    except (OSError, ValueError, KeyError, TypeError):
+        DATASET_ERROR = "ชุดข้อมูลยังไม่พร้อมหรือไม่ตรงกับ PDF จึงหยุดตอบเพื่อป้องกันการใช้ข้อมูลผิดฉบับครับ"
+        return []
     for entry in entries:
         entry["_haystack"] = " ".join([
             entry["topic"], entry["description"], entry["syntax"], entry["example"]
@@ -235,6 +250,9 @@ def topic_index():
 def search(query, limit=6, min_score=1.0):
     """Require topic evidence; never promote an unrelated definition or body match."""
     text = query.lower().strip()
+    exact = [entry for entry in ENTRIES if entry["topic"].lower() == text]
+    if exact:
+        return exact[:limit]
     words = set(_WORD_RE.findall(text)) - _STOPWORDS - {"function", "use", "explain", "does"}
     words |= _alias_words(text)
     if re.search(r"(?:what is sql|sql คืออะไร|ภาษา sql)", text):
@@ -261,6 +279,11 @@ def search(query, limit=6, min_score=1.0):
 
 def answer_from_dataset(history):
     """No generated prose: render only stored fields, with traceable provenance."""
+    global ENTRIES
+    # Revalidate on each answer, including when files change after startup.
+    ENTRIES = load_entries()
+    if DATASET_ERROR:
+        return DATASET_ERROR
     questions = [m["content"] for m in history if m.get("role") == "user"]
     query = questions[-1] if questions else ""
     entries = search(query, limit=2)

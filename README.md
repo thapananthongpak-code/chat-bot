@@ -1,131 +1,58 @@
 # Ch-Bot — ครูเอสคิว (ผู้เชี่ยวชาญ SQL)
 
-แชตบอทผู้เชี่ยวชาญด้าน SQL และฐานข้อมูล ตอบภาษาไทย โดยอ้างอิงคลังความรู้จากไฟล์ CSV ใน [`knowledge/`](knowledge/)
+แชตบอท SQL และฐานข้อมูล ตอบภาษาไทย โดยดึงคำตอบจากคู่มือ 126 หน้าในไฟล์
+[`knowledge/sql_handbook_th.md`](knowledge/sql_handbook_th.md) เท่านั้น ไม่ใช้ AI แต่งคำตอบ
 ใช้งานได้ทั้งผ่านหน้าเว็บและ LINE
 
 > โปรเจกต์นี้เป็น **Python / Flask** ไม่ใช่ Node.js — ใช้ `npm start` ไม่ได้ครับ
 
 ## วิธีรัน
 
-**1. ติดตั้ง dependencies** (ทำครั้งเดียว)
-
 ```bash
 python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
-```
-
-**2. ใส่ API key** — เปิดไฟล์ `.env` แล้วเติม key ของ Gemini (ขอฟรีที่ https://aistudio.google.com/apikey)
-
-```
-GEMINI_API_KEY=xxxxxxxxxxxxxxxx
-```
-
-โมเดลเริ่มต้นคือ `gemini-3.5-flash-lite` — โควตาฟรีมากกว่า `gemini-3.5-flash` ถึง 3 เท่า
-(15 เทียบกับ 5 คำขอ/นาที) และตอบเร็วกว่าราว 3 เท่า ถ้าอยากได้คำตอบละเอียดกว่านี้
-เปลี่ยนเป็น `GEMINI_MODEL=gemini-3.5-flash` ใน `.env` ได้
-ดูว่า key ของคุณใช้โมเดลไหนได้บ้าง:
-
-```bash
-./venv/bin/python -c "from google import genai; import os; \
-[print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"
-```
-
-ส่วน `LINE_CHANNEL_ACCESS_TOKEN` และ `LINE_CHANNEL_SECRET` ใส่เฉพาะตอนจะต่อ LINE ถ้ารันแค่หน้าเว็บ ปล่อยว่างไว้ได้
-
-**3. รันเซิร์ฟเวอร์**
-
-```bash
 ./venv/bin/python app.py
 ```
 
-แล้วเปิดเบราว์เซอร์ที่ http://127.0.0.1:5001
+แล้วเปิดเบราว์เซอร์ที่ http://127.0.0.1:5001 — ไม่ต้องใช้ API key
+ส่วน `LINE_CHANNEL_ACCESS_TOKEN` และ `LINE_CHANNEL_SECRET` ใน `.env` ใส่เฉพาะตอนจะต่อ LINE
 
 ## โครงสร้าง
 
 | ไฟล์ | หน้าที่ |
 |---|---|
-| `app.py` | เซิร์ฟเวอร์ Flask, system prompt, เชื่อม Gemini API และ LINE webhook |
-| `knowledge_base.py` | โหลด CSV และค้นหาหัวข้อที่ตรงกับคำถาม เพื่อแนบไปกับ prompt |
-| `knowledge/*.md` | คลังความรู้ SQL (รองรับ `.csv` ด้วย) |
-| `tools_pdf_to_md.py` | เครื่องมือแปลงคู่มือ PDF เป็น Markdown |
-| `templates/index.html` | หน้าเว็บแชต แสดงคำตอบแบบทยอยพิมพ์ พร้อมไฮไลต์โค้ด SQL |
-| `data/` | ประวัติแชตเป็นไฟล์ JSON — `web_<chat_id>.json` และ `line_<user_id>.json` (ไม่ขึ้น git) |
+| `app.py` | เซิร์ฟเวอร์ Flask, หน้าเว็บ, LINE webhook |
+| `knowledge_base.py` | โหลดคู่มือ ตรวจ checksum และค้นหัวข้อที่ตรงกับคำถาม |
+| `knowledge/sql_handbook_th.md` | ฐานข้อมูลความรู้ 123 หัวข้อ (ไฟล์เดียวที่บอทใช้) |
+| `output/pdf/sql_database_handbook_th.pdf` | คู่มือ PDF 126 หน้า (ดาวน์โหลดได้ที่ `/handbook.pdf`) |
+| `output/pdf/manifest.json` | checksum ของ MD และ PDF ใช้ยืนยันว่าสองไฟล์ตรงกัน |
+| `templates/index.html` | หน้าเว็บแชต |
+| `data/` | ประวัติแชตเป็นไฟล์ JSON (ไม่ขึ้น git) |
 
-## ขอบเขตคำตอบ
+## วิธีตอบ
 
-ค่าเริ่มต้นคือ **โหมดเข้ม** (`STRICT_KNOWLEDGE=1`) บอทจะตอบเฉพาะเนื้อหาที่อยู่ใน
-`knowledge/` เท่านั้น ถ้าถามเรื่องที่ไม่มีในคลัง จะบอกตรง ๆ ว่าไม่มี แล้วแนะนำหัวข้อ
-ใกล้เคียงที่มีอยู่ แทนที่จะตอบจากความรู้ทั่วไปของโมเดล
+บอทเลือกหัวข้อที่ตรงกับคำถาม แล้วแสดงคำอธิบาย รูปแบบคำสั่ง และตัวอย่างจากไฟล์ตรง ๆ
+พร้อมเลขหน้าและแหล่งอ้างอิง ถ้าไม่พบหัวข้อจะตอบว่าไม่พบข้อมูล
+บอทจึงไม่แต่งเนื้อหาเอง แต่ก็เขียน query ใหม่ตามโจทย์ให้ไม่ได้
 
-ตั้ง `STRICT_KNOWLEDGE=0` ใน `.env` ถ้าอยากให้ตอบจากความรู้ SQL ทั่วไปได้ด้วยเมื่อไม่มีในคลัง
+ก่อนตอบทุกครั้งระบบตรวจว่า MD และ PDF ตรงกับ `manifest.json` ถ้าไม่ตรงจะหยุดตอบ
+ดังนั้นเวลาแก้เนื้อหา ต้องแก้ MD และ PDF ไปด้วยกัน แล้วอัปเดต checksum ใน manifest ด้วย
 
-## เพิ่มความรู้ให้บอท
-
-วางไฟล์ `.md` เพิ่มใน `knowledge/` ได้เลย ระบบโหลดทุกไฟล์ในโฟลเดอร์นั้นอัตโนมัติ
-(รองรับ `.csv` แบบ 4 คอลัมน์ด้วย เผื่อใครถนัดทำข้อมูลใน Excel)
-
-### รูปแบบไฟล์ Markdown
-
-```markdown
-## ฟังก์ชัน COUNT()
-
-ฟังก์ชัน COUNT() ใช้นับจำนวนแถวที่ตรงตามเงื่อนไขที่กำหนด
-
-### รูปแบบคำสั่ง
-​```sql
-SELECT COUNT(column_name) FROM table_name WHERE condition;
-​```
-
-### ตัวอย่าง
-​```sql
-SELECT COUNT(*) FROM Products;
-​```
-```
-
-`## หัวข้อ` = 1 หัวข้อ · ข้อความถัดมา = คำอธิบาย ·
-`### รูปแบบคำสั่ง` = Syntax · `### ตัวอย่าง` = Example
-หัวข้อไหนไม่มี Syntax หรือตัวอย่าง ก็ไม่ต้องใส่ส่วนนั้น
-
-### ข้อควรรู้ 2 ข้อ
-
-**ตั้งชื่อหัวข้อให้มีคำศัพท์อังกฤษเสมอ** เช่น `ฟังก์ชัน COUNT()` เพราะตัวค้นหาให้น้ำหนัก
-คำอังกฤษที่ตรงกับหัวข้อสูงที่สุด ถ้าหัวข้อเป็นภาษาไทยล้วนผู้ใช้จะค้นหาไม่เจอ
-
-**ยิ่งคำอธิบายละเอียด โมเดลยิ่งไม่ต้องแต่งเติมเอง** — วัดแล้วหัวข้อที่ข้อมูลในไฟล์สั้น
-โมเดลจะขยายความเองมากถึง 3 เท่า ส่วนหัวข้อที่ข้อมูลครบจะขยายเพียง 1.1 เท่า
-
-### แปลงจากไฟล์ PDF
+## ทดสอบ
 
 ```bash
-./venv/bin/pip install pypdf
-./venv/bin/python tools_pdf_to_md.py คู่มือ.pdf knowledge/ชื่อไฟล์.md
+./venv/bin/python -m unittest test_knowledge test_handbook_app test_dataset_only -v
 ```
-
-รองรับ PDF ที่จัดหัวข้อเป็นเลขลำดับ (เช่น `3. คำสั่ง SELECT`) และมีหัวข้อย่อย
-`รูปแบบคำสั่ง` กับ `ตัวอย่าง` — ใช้ได้เฉพาะ PDF ที่คัดลอกข้อความได้ (ไม่ใช่ไฟล์สแกน)
 
 ## Deploy ขึ้น Vercel
 
-Vercel ตรวจจับ Flask ให้อัตโนมัติ เพราะ entrypoint ชื่อ `app.py` และมีตัวแปรชื่อ `app` — ไม่ต้องมี `vercel.json`
+Vercel ตรวจจับ Flask ให้อัตโนมัติ (entrypoint `app.py`, ตัวแปร `app`) — ไม่ต้องมี `vercel.json`
 
 1. Import repo นี้ที่ https://vercel.com/new
-2. ใส่ Environment Variables ในหน้า Settings ของโปรเจกต์ (ห้าม commit ไฟล์ `.env` ขึ้น git)
-
-   | ตัวแปร | จำเป็น |
-   |---|---|
-   | `GEMINI_API_KEY` | ใช่ |
-   | `GEMINI_MODEL` | ไม่ (ค่าเริ่มต้น `gemini-3.5-flash`) |
-   | `LINE_CHANNEL_ACCESS_TOKEN` | เฉพาะตอนใช้ LINE |
-   | `LINE_CHANNEL_SECRET` | เฉพาะตอนใช้ LINE |
-
+2. ถ้าใช้ LINE ใส่ `LINE_CHANNEL_ACCESS_TOKEN` และ `LINE_CHANNEL_SECRET` ใน Environment Variables
 3. Deploy แล้วตั้ง LINE Webhook URL เป็น `https://<โปรเจกต์>.vercel.app/callback`
 
-### ข้อจำกัดบน Vercel ที่ควรรู้
+### ข้อจำกัดบน Vercel
 
-- **แชตหน้าเว็บ** เก็บประวัติเต็มไว้ใน `localStorage` ของเบราว์เซอร์เป็นหลัก จึงไม่หายเมื่อรีเฟรชและใช้งานได้เหมือนกันทั้งในเครื่องและบน Vercel ส่วนไฟล์ JSON ใน `data/` เป็นสำเนาฝั่งเซิร์ฟเวอร์ (บน Vercel เขียนได้แค่ `/tmp` จึงไม่ถาวร) ประวัติผูกกับเบราว์เซอร์ที่ใช้ ถ้าเปลี่ยนเครื่องหรือล้าง cache จะไม่เห็นแชทเก่า
-- **ประวัติแชต LINE ไม่ถาวร** — Vercel เขียนไฟล์ได้เฉพาะ `/tmp` ซึ่งอยู่แค่ในอายุของ instance นั้น บอทอาจลืมบทสนทนาเก่าเป็นครั้งคราว ถ้าต้องการให้จำจริงต้องต่อฐานข้อมูลภายนอก (เช่น Vercel KV, Upstash Redis หรือ Postgres) แล้วแก้ `load_line_history` / `save_line_history`
-
-## ต่อกับ LINE
-
-รันเซิร์ฟเวอร์ให้เข้าถึงจากภายนอกได้ (เช่นผ่าน ngrok หรือ deploy ขึ้น host) แล้วตั้ง Webhook URL
-ใน LINE Developers Console เป็น `https://<โดเมนของคุณ>/callback`
+- **แชตหน้าเว็บ** เก็บประวัติไว้ใน `localStorage` ของเบราว์เซอร์ ไม่หายเมื่อรีเฟรช แต่ถ้าเปลี่ยนเครื่องหรือล้าง cache จะไม่เห็นแชทเก่า
+- **ประวัติแชต LINE ไม่ถาวร** — Vercel เขียนไฟล์ได้เฉพาะ `/tmp` ถ้าต้องการให้จำจริงต้องต่อฐานข้อมูลภายนอก แล้วแก้ `load_line_history` / `save_line_history`

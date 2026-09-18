@@ -1,7 +1,5 @@
 from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context, send_file
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
@@ -14,15 +12,7 @@ import knowledge_base as kb
 load_dotenv()
 app = Flask(__name__)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-# flash-lite ให้โควตาฟรีมากกว่า flash 3 เท่า (15 vs 5 คำขอ/นาที) และตอบเร็วกว่า ~3 เท่า
-# อยากได้คำตอบละเอียดกว่านี้ เปลี่ยนเป็น gemini-3.5-flash ใน .env ได้
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
-
-# Dataset answers do not require a model key.
-
-# สร้าง client ครั้งเดียวตอนเริ่ม ถ้าสร้างใหม่ทุกคำขอจะโดนปิดตัวเองระหว่างทาง
-gemini = genai.Client(api_key=GEMINI_API_KEY or "missing-key")
+# Dataset-only mode: no generative client, prompt, or environment override.
 configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
 handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET") or "disabled-local-web-only")
 
@@ -35,92 +25,6 @@ try:
     os.makedirs(DATA_DIR, exist_ok=True)
 except OSError as exc:
     print(f"[!] สร้างโฟลเดอร์เก็บประวัติไม่ได้ ({exc}) — บอทจะทำงานต่อได้แต่ไม่จำบทสนทนา LINE")
-
-SYSTEM_PROMPT = """
-คุณคือ "ครูเอสคิว" ผู้เชี่ยวชาญด้าน SQL และฐานข้อมูลเชิงสัมพันธ์ (Relational Database)
-คุณตอบเป็นภาษาไทยเสมอ ไม่ว่าผู้ใช้จะพิมพ์ภาษาอะไรมาก็ตาม (ยกเว้นคำสั่ง SQL และศัพท์เทคนิคที่คงไว้เป็นภาษาอังกฤษ)
-
-บุคลิก:
-- เป็นผู้เชี่ยวชาญที่สอนเก่ง อธิบายเรื่องยากให้เข้าใจง่าย ตรงประเด็น ไม่เยิ่นเย้อ
-- สุภาพ เป็นมิตร ลงท้ายด้วย "ครับ" ทุกครั้ง ห้ามใช้ "ค่ะ" หรือ "คะ" เด็ดขาด
-  และเรียกชื่อผู้ใช้เมื่อทราบชื่อ
-- ไม่ตัดสินว่าคำถามง่ายหรือยาก ผู้ใช้ถามอะไรก็ตอบด้วยความตั้งใจ
-
-วิธีตอบ:
-1. เริ่มด้วยคำอธิบายสั้น ๆ ว่าคำสั่ง/แนวคิดนั้นใช้ทำอะไร
-2. แสดงรูปแบบคำสั่ง (Syntax) และตัวอย่างจริง ในบล็อกโค้ด ```sql เสมอ
-3. ปิดท้ายด้วยข้อควรระวังหรือทริกสั้น ๆ ถ้ามี (เช่น UPDATE/DELETE ต้องมี WHERE)
-4. ถ้าผู้ใช้ให้โจทย์มา ให้เขียนคำสั่ง SQL ที่ใช้ได้จริงพร้อมอธิบายทีละส่วน
-5. ถ้าคำถามกำกวม (ไม่รู้ชื่อตาราง/คอลัมน์) ให้สมมติชื่อที่สมเหตุสมผลแล้วบอกว่าสมมติไว้อย่างไร
-
-กฎเรื่องความถูกต้อง:
-- ยึด "ข้อมูลอ้างอิง" ที่ระบบส่งให้เป็นหลักก่อนเสมอ ถ้ามีเนื้อหาตรงกับคำถาม ให้ตอบตามนั้น
-- ระบุด้วยว่าไวยากรณ์ต่างกันตามระบบฐานข้อมูลตรงไหน (เช่น LIMIT ใน MySQL vs TOP ใน SQL Server)
-- ห้ามแต่งฟังก์ชันหรือไวยากรณ์ที่ไม่มีอยู่จริง
-
-ขอบเขต:
-- ตอบเฉพาะเรื่อง SQL ฐานข้อมูล การออกแบบตาราง และความปลอดภัยของฐานข้อมูล
-- ถ้าผู้ใช้ถามนอกเรื่อง ให้ปฏิเสธอย่างสุภาพและชวนกลับมาคุยเรื่อง SQL
-"""
-
-# โหมดเข้ม: ตอบได้เฉพาะสิ่งที่มีในคลังความรู้เท่านั้น
-STRICT_RULES = """
-กฎเหล็กเรื่องแหล่งข้อมูล (สำคัญที่สุด เหนือกฎอื่นทั้งหมด):
-- ตอบได้เฉพาะจากเนื้อหาใน "ข้อมูลอ้างอิง" ที่ระบบส่งให้เท่านั้น
-- ห้ามใช้ความรู้ SQL ที่คุณมีอยู่เดิมมาเสริม เติม หรือแต่งต่อโดยเด็ดขาด
-- ถ้าข้อมูลอ้างอิงไม่มีเนื้อหาที่ตอบคำถามได้ ให้บอกตรง ๆ ว่า
-  "เรื่องนี้ยังไม่มีอยู่ในคลังความรู้ของผมครับ" แล้วแนะนำหัวข้อใกล้เคียงที่มีในข้อมูลอ้างอิงแทน
-  ห้ามเดา ห้ามตอบจากความรู้ทั่วไป แม้จะมั่นใจว่าถูกก็ตาม
-แยกให้ชัดระหว่าง 2 สถานการณ์:
-
-ก) ผู้ใช้ถามว่า "X คืออะไร / ใช้ยังไง" (ถามความรู้)
-   ให้อธิบายตามข้อมูลอ้างอิง และยกได้เฉพาะตัวอย่างที่ปรากฏในข้อมูลอ้างอิงเท่านั้น
-   ห้ามคิดตัวอย่างเพิ่มเองเด็ดขาด แม้จะถูกต้องตามหลัก SQL ก็ตาม
-
-ข) ผู้ใช้ตั้งโจทย์ให้เขียนคำสั่ง (เช่น "หาลูกค้าที่ยอดสั่งซื้อเกิน 1000")
-   *** กรณีนี้ให้เขียนคำสั่งให้เสมอ ห้ามปฏิเสธ *** ตราบใดที่คำสั่งที่ต้องใช้
-   (เช่น SUM, GROUP BY, HAVING, JOIN) ปรากฏอยู่ในข้อมูลอ้างอิง
-   การนำคำสั่งที่มีในข้อมูลอ้างอิงมาประกอบกันเพื่อตอบโจทย์ ไม่ถือว่าแต่งขึ้นเอง
-   แต่ห้ามใช้คำสั่งหรือฟังก์ชันที่ไม่ปรากฏในข้อมูลอ้างอิง
-   ถ้าต้องสมมติชื่อตาราง/คอลัมน์ ให้ใช้ชื่อที่ปรากฏในข้อมูลอ้างอิง และบอกว่าสมมติไว้อย่างไร
-
-จะปฏิเสธได้ก็ต่อเมื่อ "คำสั่งที่จำเป็นต้องใช้" ไม่มีอยู่ในข้อมูลอ้างอิงจริง ๆ เท่านั้น
-
-กฎการขยายความ (ห้ามละเมิด):
-- ถ้าช่องใดเขียนว่าไม่มีข้อมูลในคลังความรู้ ให้ข้ามส่วนนั้นไปเลย ห้ามเติมให้
-  เช่น ถ้าไม่มีตัวอย่าง ก็ไม่ต้องมีหัวข้อ "ตัวอย่าง" ในคำตอบ
-- ห้ามเพิ่มหัวข้อ "ข้อควรระวัง" "ทริก" หรือคำอธิบายผลลัพธ์ ถ้าเนื้อหานั้นไม่ได้อยู่ในข้อมูลอ้างอิง
-- เรียบเรียงถ้อยคำให้อ่านง่ายได้ แต่ห้ามเพิ่มข้อเท็จจริงใหม่ที่ไม่มีในข้อมูลอ้างอิง
-- ตอบสั้นกระชับตามปริมาณข้อมูลที่มีจริง ไม่ต้องพยายามเขียนให้ยาว
-
-กฎเหล็กข้อสุดท้าย — ความยาวคำตอบต้องสมดุลกับข้อมูลที่มี:
-- ถ้าข้อมูลอ้างอิงเรื่องนั้นมีแค่ 1-2 ประโยค คำตอบก็ต้องสั้นประมาณนั้น
-  ห้ามขยายเป็นหลายย่อหน้าเด็ดขาด
-- ห้ามแตกเป็นรายการ bullet หรือหัวข้อย่อย ถ้าข้อมูลอ้างอิงไม่ได้แจกแจงไว้แบบนั้น
-  เช่น ถ้าไฟล์เขียนว่า "ใช้จัดการฐานข้อมูล" ห้ามแตกเป็น ดึง/เพิ่ม/แก้ไข/ลบ เอง
-- ห้ามใช้อุปมาอุปไมยหรือคำเปรียบเทียบที่ไม่มีในข้อมูลอ้างอิง
-  (เช่น "เหมือนภาษาที่ใช้สนทนากับฐานข้อมูล")
-- ห้ามสรุปหรืออนุมานต่อจากข้อมูลอ้างอิง ให้ยึดตามที่เขียนไว้เท่านั้น
-  เช่น ถ้าไฟล์บอกว่า MySQL เป็นตัวอย่างของ RDBMS ห้ามสรุปเองว่า "SQL ใช้ได้กับทุกตัว"
-- ห้ามใส่อีโมจิ
-- ก่อนตอบทุกครั้ง ให้ตรวจทุกประโยคว่าหาที่มาในข้อมูลอ้างอิงได้จริง
-  ประโยคไหนหาไม่เจอ ให้ตัดทิ้ง
-"""
-
-# เปิดโหมดเข้มเป็นค่าเริ่มต้น ปิดได้ด้วย STRICT_KNOWLEDGE=0 ใน .env
-STRICT_KNOWLEDGE = os.getenv("STRICT_KNOWLEDGE", "1").strip().lower() not in ("0", "false", "no")
-if STRICT_KNOWLEDGE:
-    SYSTEM_PROMPT += STRICT_RULES
-
-OUT_OF_SCOPE_REPLY = (
-    "เรื่องนี้ยังไม่มีอยู่ในคลังความรู้ของผมครับ ผมตอบได้เฉพาะเนื้อหาที่อยู่ในคลังเท่านั้น\n\n"
-    "ลองถามหัวข้อเหล่านี้ดูได้ครับ เช่น SELECT, WHERE, ORDER BY, JOIN แบบต่าง ๆ, "
-    "GROUP BY, HAVING, ฟังก์ชัน COUNT/SUM/AVG, การสร้างตาราง, PRIMARY KEY, "
-    "FOREIGN KEY หรือการป้องกัน SQL Injection"
-)
-
-# หัวข้อทั้งหมดในคลังความรู้ ใช้บอกขอบเขตที่ตอบได้จากไฟล์ CSV
-TOPIC_INDEX = kb.topic_index()
 
 MAX_HISTORY = 30  # เก็บสูงสุด 30 ข้อความล่าสุด
 
@@ -196,98 +100,22 @@ def clean_history(raw):
     ]
 
 
-def search_query(recent):
-    """รวมคำถามล่าสุดกับคำถามก่อนหน้า เพื่อให้คำถามต่อเนื่องสั้น ๆ
-    เช่น "แล้วแบบไม่ซ้ำล่ะ" ยังค้นหาหัวข้อที่เกี่ยวข้องเจอ"""
-    users = [m["content"] for m in recent if m["role"] == "user"]
-    return " ".join(users[-2:])
-
-
-def build_reference(entries):
-    """จัดรูปหัวข้อที่ค้นเจอ เพื่อแนบไปกับ prompt"""
-    if not entries:
-        return (
-            "ข้อมูลอ้างอิง: ไม่พบหัวข้อที่ตรงกับคำถามนี้ในคลังความรู้\n"
-            f"หัวข้อที่มีในคลัง: {TOPIC_INDEX}"
-        )
-    return (
-        "ข้อมูลอ้างอิงจากคลังความรู้ SQL (ใช้เป็นแหล่งข้อมูลหลักในการตอบ):\n\n"
-        f"{kb.format_entries(entries)}"
-    )
-
-
-def trim_history(history):
-    """ตัดเอาเฉพาะข้อความล่าสุด และต้องเริ่มด้วย role user เท่านั้น (ข้อบังคับของ Gemini API)"""
-    recent = history[-MAX_HISTORY:]
-    while recent and recent[0]["role"] != "user":
-        recent.pop(0)
-    return recent
-
-
-def prepare(history, system):
-    """เตรียมข้อมูลสำหรับเรียก Gemini คืน (contents, config) หรือ (None, ข้อความตอบแทน)"""
-    recent = trim_history(history)
-    entries = kb.search(search_query(recent), limit=6)
-
-    # โหมดเข้ม: ค้นไม่เจอเลยก็ตอบปฏิเสธไปตรง ๆ ไม่ต้องเรียก API
-    # การันตีว่าคำตอบไม่หลุดออกนอกคลังความรู้ และประหยัดโควตาไปด้วย
-    if STRICT_KNOWLEDGE and not entries:
-        return None, OUT_OF_SCOPE_REPLY
-    if not GEMINI_API_KEY:
-        return None, "ยังไม่ได้ตั้งค่า GEMINI_API_KEY ในไฟล์ .env ครับ กรุณาใส่ key แล้วรันเซิร์ฟเวอร์ใหม่อีกครั้ง"
-
-    # Gemini ไม่รองรับ system message กลางบทสนทนา จึงต่อข้อมูลอ้างอิงไว้ท้าย system prompt
-    full_system = f"{system}\n\n{build_reference(entries)}"
-    # Gemini เรียกฝั่งผู้ช่วยว่า "model" ไม่ใช่ "assistant"
-    contents = [
-        types.Content(
-            role="user" if m["role"] == "user" else "model",
-            parts=[types.Part.from_text(text=m["content"])],
-        )
-        for m in recent
-    ]
-    config = types.GenerateContentConfig(
-        system_instruction=full_system,
-        max_output_tokens=2048,  # คำตอบสอน SQL ไม่ยาวมาก และ LINE จำกัดที่ 5000 ตัวอักษร
-        temperature=0.3,  # ต่ำไว้ เพราะต้องเรียบเรียงตามไฟล์ ไม่ใช่คิดเอง
-        # ไม่ได้ใช้ tool ปิดไว้กัน warning รก log
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-    )
-    return (contents, config), None
-
-
-def explain_error(exc):
-    """แปลง error ของ Gemini เป็นข้อความภาษาไทยที่ผู้ใช้เข้าใจ"""
-    print(f"[!] เรียก Gemini ไม่สำเร็จ: {type(exc).__name__}: {exc}")
-    detail, code = str(exc), getattr(exc, "code", None)
-    if code == 429:
-        wait = re.search(r"retryDelay['\"]?:\s*['\"]?(\d+)", detail)
-        more = f" (อีกประมาณ {wait.group(1)} วินาที)" if wait else ""
-        return f"โควตาฟรีของ Gemini เต็มชั่วคราวครับ รบกวนรอสักครู่แล้วลองใหม่นะครับ{more}"
-    if "API_KEY_INVALID" in detail or "API key not valid" in detail:
-        return "GEMINI_API_KEY ไม่ถูกต้องครับ กรุณาตรวจสอบ key ในไฟล์ .env"
-    if code == 404:
-        return (f"ไม่พบโมเดล '{GEMINI_MODEL}' ครับ อาจถูกเปลี่ยนชื่อหรือ key ยังเข้าไม่ถึง\n"
-                "ลองเปลี่ยนค่า GEMINI_MODEL ใน .env เป็นรุ่นอื่น เช่น gemini-3.5-flash")
-    return _fail_message(exc)
-
-
-def stream_reply(history, system=SYSTEM_PROMPT):
+def stream_reply(history, system=None):
     """Extract stored content without a generative model."""
     yield kb.answer_from_dataset(history)
 
 
-def chat_with_ai(history, system=SYSTEM_PROMPT):
+def chat_with_ai(history, system=None):
     return kb.answer_from_dataset(history)
 
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", handbook_pages=kb.DOCUMENT_META.get("expected_pages", "—"))
 
 @app.get("/handbook.pdf")
 def handbook_pdf():
-    return send_file(os.path.join(app.root_path, "output/pdf/sql_database_handbook_100p_th.pdf"), mimetype="application/pdf")
+    return send_file(os.path.join(app.root_path, "output/pdf/sql_database_handbook_th.pdf"), mimetype="application/pdf")
 
 @app.get("/handbook.md")
 def handbook_markdown():
@@ -314,13 +142,9 @@ def chat_stream():
     history = clean_history(payload.get("history"))
     history = history + [{"role": "user", "content": user_message}]
 
-    system = SYSTEM_PROMPT
-    if name:
-        system += f"\nผู้ใช้ชื่อ '{name}' ให้เรียกชื่อด้วยเสมอ"
-
     def generate():
         collected = []
-        for piece in stream_reply(history, system=system):
+        for piece in stream_reply(history):
             collected.append(piece)
             yield piece
         reply = "".join(collected)

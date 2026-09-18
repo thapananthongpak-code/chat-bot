@@ -27,7 +27,7 @@ class DatasetTests(unittest.TestCase):
 
     def test_sources(self):
         added = [e for e in kb.ENTRIES if e['source'] == 'sql_handbook_th.md']
-        self.assertEqual(len(added), 99)
+        self.assertEqual(len(added), 123)
         self.assertTrue(all('https://' in e['references'] for e in added))
 
 

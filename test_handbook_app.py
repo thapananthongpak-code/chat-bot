@@ -13,7 +13,8 @@ class HandbookRoutes(unittest.TestCase):
                 response = client.get(path)
                 self.assertEqual(response.status_code, 200)
                 response.close()
-            self.assertEqual(len(client.get('/knowledge/topics').json), 99)
+            self.assertEqual(len(client.get('/knowledge/topics').json), 123)
+            self.assertIn('126 หน้า', client.get('/').get_data(as_text=True))
 
     def test_dataset_answer(self):
         with application.app.test_client() as client, patch.object(application, 'save_web_chat'):
