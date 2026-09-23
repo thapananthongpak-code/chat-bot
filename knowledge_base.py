@@ -1,4 +1,4 @@
-"""โหลดชุดข้อมูลความรู้ SQL จากไฟล์ CSV แล้วค้นหาหัวข้อที่เกี่ยวข้องกับคำถามผู้ใช้"""
+"""โหลดตำราฐานข้อมูล (Markdown ที่แปลงจาก PDF) แล้วค้นหาหัวข้อที่เกี่ยวข้องกับคำถามผู้ใช้"""
 
 import csv
 import os
@@ -23,36 +23,63 @@ _TH_NOISE = [
     "ช่วยอธิบาย", "อธิบาย", "ช่วยบอก", "ช่วย", "หน่อย", "ขอตัวอย่าง",
     "ตัวอย่าง", "อยากรู้", "อยากทราบ", "เรื่อง", "ครับ", "ค่ะ", "คะ", "นะ",
     "แล้ว", "และ", "หรือ", "ที่", "ให้", "ได้", "การ", "ของ", "แบบ", "ทำ", "ใช้",
+    "ความแตกต่าง", "แตกต่าง", "ต่างกัน", "เปรียบเทียบ", "ไหม", "กับ",
 ]
 
 
 # คนไทยถามด้วยคำธรรมดา แต่หัวข้อในไฟล์เป็นศัพท์อังกฤษ ตารางนี้เชื่อมสองฝั่งเข้าหากัน
 # ระบบให้คะแนนคำอังกฤษที่ตรงกับหัวข้อสูงสุด การเติมคำอังกฤษให้จึงช่วยการค้นหาได้มาก
+# คำอังกฤษฝั่งซ้ายต้องมีอยู่ในชื่อหัวข้อของตำรา ไม่งั้นเติมไปก็ไม่ช่วย
 _ALIASES = {
-    "sum": ("ผลรวม", "ยอดรวม", "รวมยอด", "บวกกัน", "รวมทั้งหมด", "ซื้อรวม", "ขายรวม"),
-    "group by": ("จัดกลุ่ม", "แต่ละกลุ่ม", "แยกตาม", "จัดหมวด", "ต่อกลุ่ม"),
-    "having": ("กรองหลังจัดกลุ่ม", "กลุ่มที่มากกว่า", "กลุ่มที่เกิน"),
-    "count": ("นับจำนวน", "มีกี่", "จำนวนแถว", "นับ"),
-    "avg": ("ค่าเฉลี่ย", "เฉลี่ย"),
-    "max": ("มากสุด", "สูงสุด"),
-    "min": ("น้อยสุด", "ต่ำสุด"),
-    "order by": ("เรียงลำดับ", "จัดเรียง", "เรียงจาก", "มากไปน้อย", "น้อยไปมาก"),
-    "where": ("กรองข้อมูล", "เฉพาะที่", "เงื่อนไข"),
-    "join": ("เชื่อมตาราง", "รวมตาราง", "ต่อตาราง", "สองตาราง", "หลายตาราง", "ตารางมาต่อ"),
-    "distinct": ("ไม่ซ้ำ", "ไม่ให้ซ้ำ", "ซ้ำกัน"),
-    "like": ("ค้นหาคำ", "ขึ้นต้นด้วย", "ลงท้ายด้วย", "มีคำว่า"),
-    "between": ("อยู่ระหว่าง", "ช่วงตั้งแต่", "ตั้งแต่ถึง"),
-    "insert": ("เพิ่มข้อมูล", "บันทึกข้อมูล", "ใส่ข้อมูล"),
-    "update": ("แก้ไขข้อมูล", "อัปเดต", "เปลี่ยนข้อมูล"),
-    "delete": ("ลบข้อมูล", "ลบแถว", "เอาข้อมูลออก"),
-    "limit": ("จำกัดจำนวน", "เอาแค่", "กี่อันแรก"),
-    "primary key": ("คีย์หลัก", "รหัสประจำ"),
-    "foreign key": ("คีย์นอก", "เชื่อมความสัมพันธ์"),
-    "index": ("ทำให้เร็วขึ้น", "ค้นหาเร็ว", "ดัชนี"),
-    "sql injection": ("แฮก", "โจมตี", "เจาะระบบ", "ความปลอดภัย", "ป้องกันการโจมตี"),
-    "view": ("ตารางเสมือน", "มุมมอง"),
-    "null": ("ค่าว่าง", "ไม่มีค่า"),
+    "aggregate": ("ผลรวม", "ยอดรวม", "ค่าเฉลี่ย", "เฉลี่ย", "มากสุด", "สูงสุด", "น้อยสุด", "ต่ำสุด",
+                  "นับจำนวน", "ฟังก์ชันสรุป"),
+    "group by": ("จัดกลุ่ม", "แยกตาม", "กรองหลังจัดกลุ่ม"),
+    "order by": ("เรียงลำดับ", "จัดเรียง", "มากไปน้อย", "น้อยไปมาก"),
+    "where": ("กรองข้อมูล", "เงื่อนไข"),
+    "join": ("เชื่อมตาราง", "รวมตาราง", "สองตาราง", "หลายตาราง"),
+    "distinct": ("ไม่ซ้ำ",),
+    "aliases": ("ตั้งชื่อชั่วคราว", "ชื่อเล่น"),
+    "create": ("สร้างตาราง", "สร้างฐานข้อมูล"),
+    "alter": ("แก้ไขโครงสร้าง", "เพิ่มคอลัมน์"),
+    "drop": ("ลบตาราง",),
+    "insert": ("เพิ่มข้อมูล", "ใส่ข้อมูล"),
+    "update": ("แก้ไขข้อมูล", "อัปเดต"),
+    "delete": ("ลบข้อมูล", "ลบแถว"),
+    "primary key": ("คีย์หลัก",),
+    "foreign key": ("คีย์นอก",),
 }
+
+# ศัพท์ที่ผู้ใช้พิมพ์ได้หลายแบบ แต่ตำราใช้คำเดียว: เติมคำที่ตำราใช้ต่อท้ายคำถาม
+# (ค่าที่สามเป็น True = แทนที่คำเดิมเลย เพราะคำอังกฤษเดิมจะไปตรงกับหัวข้ออื่น)
+_REWRITES = [
+    (r"weak entit(y|ies)", "เอ็นทิตี้แบบอ่อนแอ", True),
+    (r"\b1\s*nf\b|first normal form", "นอมอลฟอร์มระดับที่ 1"),
+    (r"\b2\s*nf\b|second normal form", "นอมอลฟอร์มระดับที่ 2"),
+    (r"\b3\s*nf\b|third normal form", "นอมอลฟอร์มระดับที่ 3"),
+    (r"นอร์มัลไลเซชัน|นอร์มัลไลเซชั่น|นอร์มอลไลเซชัน|นอมอลไลเซชั่น", "นอมอลไลเซชัน", True),
+    (r"normali[sz]", "นอมอลไลเซชัน"),
+    (r"นอร์มัลฟอร์ม|นอร์มอลฟอร์ม", "นอมอลฟอร์ม", True),
+    (r"normal form", "นอมอลฟอร์ม"),
+    (r"\bdbms\b", "ระบบจัดการฐานข้อมูล"),
+    (r"data dictionary", "พจนานุกรมข้อมูล"),
+    (r"\bentit(y|ies)\b|เอนทิตี|เอ็นทิตี(?!้)", "เอ็นทิตี้"),
+    (r"\battributes?\b|แอตทริบิวท์|แอทริบิวต์|แอททริบิวต์", "แอตทริบิวต์"),
+    (r"\brelations?\b|รีเลชั่น", "รีเลชัน"),
+    (r"\b(having|group)\b", "group by"),
+    (r"\b(count|avg|sum|max|min)\b", "aggregate"),
+    (r"functional dependenc|dependency|ฟังก์ชันขึ้นต่อกัน", "ฟังก์ชันการขึ้นต่อกัน"),
+    (r"\bschema\b|สคีมา", "โครงร่างฐานข้อมูล"),
+    (r"data independence", "ความเป็นอิสระของข้อมูล"),
+    (r"three.?(level|schema)|3.?(level|schema)", "สถาปัตยกรรม 3 ระดับ"),
+    (r"\berd?\b|e-r diagram|อีอาร์", "er diagram"),
+    (r"\binformation\b", "สารสนเทศ"),
+    (r"\bsecurity\b", "ความปลอดภัย"),
+    (r"\bwildcards?\b|ไวลด์การ์ด|\boperators?\b|ตัวดำเนินการ", "สัญลักษณ์"),
+    (r"\bpassword\b|รหัสผ่าน|เข้ารหัส", "ระบบรักษาความปลอดภัยสำหรับผู้ใช้"),
+]
+
+# หัวข้อบทนำ บทสรุป และแบบฝึกหัด พูดกว้าง ๆ ทั้งบท ให้แพ้หัวข้อเนื้อหาจริง เว้นแต่ผู้ใช้ถามถึงเอง
+_META_WORDS = ("บทนำ", "สรุป", "แบบฝึกหัด", "summary", "exercise")
 
 
 def _alias_words(text):
@@ -136,16 +163,18 @@ def _load_md(path):
 
 
 def load_entries():
-    """Fail closed: only load the verified handbook, never legacy files or a model."""
+    """Fail closed: only load the verified textbook, never legacy files or a model."""
     global DATASET_ERROR, DOCUMENT_META
     DATASET_ERROR, DOCUMENT_META = "", {}
-    path = os.path.join(KNOWLEDGE_DIR, "sql_handbook_th.md")
     try:
         with open(MANIFEST_PATH, encoding="utf-8") as f:
             manifest = json.load(f)
+        # basename กันไม่ให้ manifest ชี้ออกไปนอกโฟลเดอร์ที่กำหนด
+        path = os.path.join(KNOWLEDGE_DIR, os.path.basename(manifest["markdown_filename"]))
+        pdf_path = os.path.join(os.path.dirname(MANIFEST_PATH), os.path.basename(manifest["pdf_filename"]))
         for target, expected in (
             (path, manifest["markdown_sha256"]),
-            (os.path.join(os.path.dirname(MANIFEST_PATH), "sql_database_handbook_th.pdf"), manifest["pdf_sha256"]),
+            (pdf_path, manifest["pdf_sha256"]),
         ):
             with open(target, "rb") as f:
                 if hashlib.sha256(f.read()).hexdigest() != expected:
@@ -247,19 +276,62 @@ def topic_index():
     return " | ".join(e["topic"] for e in ENTRIES)
 
 
+def _expand(text):
+    for pattern, extra, *replace in _REWRITES:
+        if replace:
+            text = re.sub(pattern, extra, text)
+        elif re.search(pattern, text):
+            text += " " + extra
+    return text
+
+
+def _numbers(text):
+    """ตัวเลขที่มีความหมายในชื่อหัวข้อ เช่น 'ระดับที่ 3' โดยไม่นับเลขหัวข้อ 7.5 และลำดับ · 3."""
+    text = re.sub(r"^\d+\.\d+ |· \d+\. |บทที่ \d+", " ", text)
+    return set(re.findall(r"(?<![\d.])\d(?![\d.])", text))
+
+
+def _chapter_of(topic):
+    """'7.5 ...' / 'บทสรุป บทที่ 7 ...' / 'ภาคผนวก ก ...' -> '7' หรือ 'ก'"""
+    m = re.match(r"^(\d+)\.\d+ ", topic) or re.search(r"บทที่ (\d+)", topic) or re.search(r"ภาคผนวก ([กข])", topic)
+    return m.group(1) if m else ""
+
+
+def _is_meta(topic):
+    return topic.startswith(("บทสรุป", "แบบฝึกหัด")) or topic.endswith("(บทนำ)")
+
+
 def search(query, limit=6, min_score=1.0):
-    """Require topic evidence; never promote an unrelated definition or body match."""
+    """Require topic evidence: a word in the body alone is not evidence the book explains it."""
     text = query.lower().strip()
     exact = [entry for entry in ENTRIES if entry["topic"].lower() == text]
     if exact:
         return exact[:limit]
+    # ระบุเลขหัวข้อมาตรง ๆ เช่น "7.5"
+    num = re.search(r"(?<![\d.])(\d{1,2}\.\d{1,2})(?![\d.])", text)
+    if num:
+        by_num = [e for e in ENTRIES if e["topic"].startswith(num.group(1) + " ")]
+        if by_num:
+            return by_num[:1]
+    if re.search(r"(?:what is sql|sql คืออะไร|ภาษา sql คือ|ความหมายของภาษา sql)", text):
+        return [e for e in ENTRIES if e["topic"].startswith("8.1 ")][:1]
+
+    chapter = re.search(r"บทที่\s*(\d{1,2})|ภาคผนวก\s*([กข])", text)
+    pool = ENTRIES
+    if chapter:
+        wanted = chapter.group(1) or chapter.group(2)
+        pool = [e for e in ENTRIES if _chapter_of(e["topic"]) == wanted] or ENTRIES
+        text = text.replace(chapter.group(0), " ")
+    meta_query = any(k in text for k in _META_WORDS)
+
+    text = _expand(text)
     words = set(_WORD_RE.findall(text)) - _STOPWORDS - {"function", "use", "explain", "does"}
     words |= _alias_words(text)
-    if re.search(r"(?:what is sql|sql คืออะไร|ภาษา sql)", text):
-        return [e for e in ENTRIES if e["topic"] in ("SQL คืออะไร", "ภาษา SQL คืออะไร")][:1]
+    english = " ".join(_WORD_RE.findall(query.lower()))
     grams = _thai_ngrams(text)
+    numbers = _numbers(text)
     ranked = []
-    for e in ENTRIES:
+    for e in pool:
         topic = e["topic"].lower()
         tokens = set(_WORD_RE.findall(topic))
         hits = words & tokens
@@ -270,11 +342,23 @@ def search(query, limit=6, min_score=1.0):
         score = 10 * len(hits) + overlap * 8
         if words and hits:
             score += 5 * len(hits) / len(words)
+        # วลีอังกฤษหลายคำตรงกับชื่อหัวข้อทั้งวลี เช่น "many to many"
+        if " " in english and english in topic:
+            score += 15
+        score += 6 * len(numbers & _numbers(topic))
+        if _is_meta(e["topic"]) and not meta_query:
+            score *= .3
         ranked.append((score, e))
     ranked.sort(key=lambda x: x[0], reverse=True)
     if not ranked:
+        if chapter and pool is not ENTRIES:
+            # ถามถึงบทเฉย ๆ เช่น "บทที่ 7" ให้บทนำของบทนั้น
+            return [e for e in pool if e["topic"].endswith("(บทนำ)")][:1] or pool[:1]
         return []
     return [e for score, e in ranked if score >= max(min_score, ranked[0][0] * .7)][:limit]
+
+
+NO_DATA = "ไม่มีข้อมูลเรื่องนี้ในตำราครับ"
 
 
 def answer_from_dataset(history):
@@ -290,7 +374,7 @@ def answer_from_dataset(history):
     if not entries and len(questions) > 1 and query.startswith(("แล้ว", "ขอตัวอย่าง", "อธิบายต่อ")):
         entries = search(questions[-2] + " " + query, limit=2)
     if not entries:
-        return "ไม่พบข้อมูลที่ตรงกับคำถามในชุดข้อมูลครับ ลองระบุชื่อคำสั่งหรือหัวข้อฐานข้อมูลให้ชัดเจนขึ้น"
+        return NO_DATA
     blocks = []
     for e in entries:
         parts = ["## " + e["topic"], e["description"]]
@@ -298,7 +382,5 @@ def answer_from_dataset(history):
             if e[key]:
                 parts.append("### " + label + "\n```sql\n" + e[key] + "\n```")
         parts.append("แหล่งข้อมูล: " + e["source"] + " · " + e["topic"])
-        refs = e.get("references", "")
-        parts.append(refs or "ต้นฉบับ: คู่มือ PDF ที่ผู้ใช้จัดเตรียม (ยังไม่มี URL แหล่งตีพิมพ์)")
         blocks.append("\n\n".join(parts))
     return "\n\n---\n\n".join(blocks)

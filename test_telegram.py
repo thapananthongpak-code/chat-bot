@@ -26,11 +26,18 @@ class TelegramWebhook(unittest.TestCase):
         self.addCleanup(send.stop)
 
     def test_answers_from_handbook(self):
-        r = self.post({'message': {'chat': {'id': 42}, 'text': 'UPSERT ON CONFLICT'}})
+        r = self.post({'message': {'chat': {'id': 42}, 'text': 'LEFT JOIN'}})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.sent[0][0], 42)
-        self.assertIn('ON CONFLICT', self.sent[0][1])
+        self.assertIn('LEFT JOIN', self.sent[0][1])
         self.assertNotIn('```', self.sent[0][1])
+
+    def test_long_answer_keeps_source(self):
+        self.post({'message': {'chat': {'id': 5}, 'text': '12.5 การสร้างระบบรักษาความปลอดภัยสำหรับผู้ใช้'}})
+        text = self.sent[0][1]
+        self.assertLessEqual(len(text), 4000)
+        self.assertIn(application.TRIMMED_NOTE, text)
+        self.assertIn('แหล่งข้อมูล:', text)
 
     def test_rejects_wrong_secret(self):
         self.assertEqual(self.post({'message': {'chat': {'id': 1}, 'text': 'x'}}, secret='bad').status_code, 403)

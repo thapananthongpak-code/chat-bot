@@ -159,15 +159,25 @@ def chat_delete(chat_id):
     return jsonify({"ok": True})
 
 
-def to_line_text(text):
-    """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง"""
+TRIMMED_NOTE = "… (เนื้อหายาวเกินหนึ่งข้อความ อ่านต่อได้ในเว็บแชต)"
+
+
+def to_line_text(text, limit=4900):
+    """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง
+    ข้อความเดียวของ LINE ยาวได้ไม่เกิน 5000 ตัวอักษร (Telegram 4096)"""
     text = re.sub(r"```[a-zA-Z]*\n?", "", text)
     text = re.sub(r"^\s*\|[\s|:-]+\|\s*$", "", text, flags=re.M)  # เส้นคั่นตาราง |---|---|
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)               # หัวข้อ ## ###
     text = re.sub(r"^\s*[-*]{3,}\s*$", "", text, flags=re.M)         # เส้นคั่น ---
     text = text.replace("`", "").replace("**", "")
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()[:4900]  # ข้อความเดียวของ LINE ยาวได้ไม่เกิน 5000 ตัวอักษร
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if len(text) <= limit:
+        return text
+    # ตัดเนื้อหาตรงกลาง แต่เก็บบรรทัดแหล่งข้อมูลท้ายคำตอบไว้ ให้รู้ว่ามาจากหัวข้อไหน
+    body, sep, source = text.rpartition("\nแหล่งข้อมูล:")
+    tail = (sep + source) if sep and len(source) < 600 else ""
+    room = limit - len(tail) - len(TRIMMED_NOTE) - 2
+    return (body if sep else text)[:room].rstrip() + "\n" + TRIMMED_NOTE + "\n" + tail.lstrip("\n")
 
 
 @app.route("/callback", methods=["POST"])
@@ -198,8 +208,9 @@ def handle_message(event):
             messages=[TextMessage(text=to_line_text(reply))]
         ))
 
-TELEGRAM_WELCOME = ("สวัสดีครับ ผมครูเอสคิว ถามเรื่อง SQL และฐานข้อมูลได้เลย "
-                    "เช่น LEFT JOIN, GROUP BY, Transaction คำตอบมาจากคู่มือ 126 หน้าครับ")
+TELEGRAM_WELCOME = ("สวัสดีครับ ผมครูเอสคิว ถามเรื่องฐานข้อมูลและ SQL ได้เลย "
+                    "เช่น คีย์หลัก, ER Diagram, 3NF, GROUP BY, LEFT JOIN "
+                    "คำตอบมาจากตำราการจัดการระบบฐานข้อมูลเพื่องานธุรกิจ 426 หน้าครับ")
 
 
 def telegram_send(chat_id, text):
@@ -235,7 +246,7 @@ def telegram_webhook():
     reply = chat_with_ai(history)
     history.append({"role": "assistant", "content": reply})
     save_line_history(chat_id, history, prefix="tg")
-    telegram_send(chat_id, to_line_text(reply)[:4000])  # Telegram รับได้ไม่เกิน 4096 ตัวอักษร
+    telegram_send(chat_id, to_line_text(reply, limit=4000))  # Telegram รับได้ไม่เกิน 4096 ตัวอักษร
     return "OK", 200
 
 
