@@ -236,11 +236,10 @@
     .turn-tools { opacity: 1; }
     .body { overflow-wrap: anywhere; }
     .body a { color: inherit; text-underline-offset: 4px; }
-    .source-badge { font-size: 11px; border: 1px solid var(--line); padding: 5px 10px; border-radius: 20px; white-space: nowrap; }
     button:focus-visible, textarea:focus-visible { outline: 2px solid #999; outline-offset: 3px; }
     @keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
-    @media (max-width: 600px) { .source-badge { display: none; } .tool { min-height: 44px; } }
+    @media (max-width: 600px) { .tool { min-height: 44px; } }
     .turn.user { animation:send-arrive .3s ease-out; }
     .typing { align-items:center; gap:6px; }
     .search-label { font-size:13px; margin-right:10px; opacity:.7; }
@@ -312,13 +311,10 @@
     <div class="topbar">
       <button class="btn icon menu-btn" onclick="toggleSidebar()" aria-label="เมนู">☰</button>
       <div class="title" id="chatTitle">แชทใหม่</div>
-      <span class="source-badge">ตอบจากตำราเท่านั้น</span>
       <div class="fs-group">
         <button class="btn icon" onclick="changeFont(-1)" title="ตัวอักษรเล็กลง" aria-label="ตัวอักษรเล็กลง">A−</button>
         <button class="btn icon" onclick="changeFont(1)" title="ตัวอักษรใหญ่ขึ้น" aria-label="ตัวอักษรใหญ่ขึ้น">A+</button>
       </div>
-      <button class="btn icon" onclick="exportChat()" title="ดาวน์โหลดบทสนทนา" aria-label="ดาวน์โหลดบทสนทนา">↓</button>
-      <button class="btn icon" onclick="refreshChat()" title="โหลดใหม่">↻</button>
     </div>
 
     <div class="stream" id="stream"><div class="inner" id="turns"></div></div>
@@ -603,12 +599,6 @@
     }
 
     /* ================= การกระทำ ================= */
-    function exportChat() {
-      const blob = new Blob([JSON.stringify(current() || {}, null, 2)], {type: 'application/json'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'sql-chat.json'; a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
     function openChat(id) { if (busy) return; state.activeId = id; save(); paint(); toggleSidebar(false); }
 
     function newChat() {
@@ -625,7 +615,6 @@
       save(); paint();
     }
 
-    function refreshChat() { if (busy) return; load(); paint(); }
 
     function toggleSidebar(force) {
       const el = document.getElementById("sidebar");
