@@ -11,7 +11,7 @@ const fs=require('fs');
  await page.goto('http://handbook.test/');
  await page.locator('#input').fill('CTE');
  await page.locator('#sendBtn').click();
- await page.getByRole('status').waitFor();
+ await page.getByRole('status').filter({hasText:'กำลังค้นหา'}).waitFor();
  await page.getByText('ข้อมูลจากชุดข้อมูล',{exact:true}).waitFor();
  await page.reload();
  await page.getByText('ข้อมูลจากชุดข้อมูล',{exact:true}).waitFor();

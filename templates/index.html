@@ -246,6 +246,50 @@
     .search-label { font-size:13px; margin-right:10px; opacity:.7; }
     @keyframes send-arrive { from { opacity:0; transform:translateY(14px) scale(.98); } to { opacity:1; transform:none; } }
     @media(prefers-reduced-motion:reduce) { .turn.user { animation:none; } }
+
+    /* ---------- ขนาดตัวอักษรที่ผู้ใช้ปรับได้ ---------- */
+    .inner { --fs: 15px; }
+    .turn .body { font-size: var(--fs); }
+
+    /* ---------- ระหว่างพิมพ์คำตอบ: แถบความคืบหน้า + ปุ่มข้าม ---------- */
+    .typebar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+    .typebar .track { flex: 1; height: 2px; background: var(--line); border-radius: 2px; overflow: hidden; }
+    .typebar .fill { height: 100%; width: 0; background: var(--fg); transition: width .12s linear; }
+    .typebar .tool { padding: 2px 8px; }
+    .turn.bot.typing-now .body { cursor: pointer; }
+
+    /* คำที่ผู้ใช้ถาม ไฮไลต์ในคำตอบ */
+    mark.hit { background: none; color: inherit; box-shadow: inset 0 -.42em 0 var(--surface-2); border-radius: 2px; }
+
+    .turn-tools { align-items: center; flex-wrap: wrap; }
+    .turn-tools .meta { font-size: 11.5px; color: var(--muted); padding: 4px 9px; }
+    .tool.on { color: var(--fg); background: var(--surface-2); }
+
+    /* ปุ่มกลับไปล่างสุด */
+    .main { position: relative; }
+    .jump {
+      position: absolute; left: 50%; bottom: 112px; z-index: 5;
+      width: 36px; height: 36px; border-radius: 50%; padding: 0;
+      background: var(--bg); box-shadow: 0 6px 20px #0000001f;
+      opacity: 0; pointer-events: none; transform: translate(-50%, 8px);
+      transition: opacity .2s, transform .2s var(--ease);
+    }
+    .jump.show { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+
+    /* ข้อความแจ้งสั้น ๆ */
+    .toast {
+      position: fixed; left: 50%; bottom: 28px; z-index: 60;
+      background: var(--fg); color: var(--bg); font-size: 13px;
+      padding: 8px 16px; border-radius: 999px;
+      opacity: 0; transform: translate(-50%, 10px); pointer-events: none;
+      transition: opacity .2s, transform .2s var(--ease);
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    .fs-group { display: flex; gap: 4px; }
+    .fs-group .btn.icon { font-size: 12.5px; font-weight: 600; }
+    .welcome-sub { color: var(--muted); font-size: 13px; }
+    @media (max-width: 600px) { .fs-group { display: none; } .jump { bottom: 96px; } }
   </style>
 </head>
 <body>
@@ -268,21 +312,27 @@
     <div class="topbar">
       <button class="btn icon menu-btn" onclick="toggleSidebar()" aria-label="เมนู">☰</button>
       <div class="title" id="chatTitle">แชทใหม่</div>
-      <span class="source-badge">คำตอบจากชุดข้อมูลเท่านั้น</span>
+      <span class="source-badge">ตอบจากตำราเท่านั้น</span>
+      <div class="fs-group">
+        <button class="btn icon" onclick="changeFont(-1)" title="ตัวอักษรเล็กลง" aria-label="ตัวอักษรเล็กลง">A−</button>
+        <button class="btn icon" onclick="changeFont(1)" title="ตัวอักษรใหญ่ขึ้น" aria-label="ตัวอักษรใหญ่ขึ้น">A+</button>
+      </div>
       <button class="btn icon" onclick="exportChat()" title="ดาวน์โหลดบทสนทนา" aria-label="ดาวน์โหลดบทสนทนา">↓</button>
       <button class="btn icon" onclick="refreshChat()" title="โหลดใหม่">↻</button>
     </div>
 
     <div class="stream" id="stream"><div class="inner" id="turns"></div></div>
+    <button class="btn jump" id="jumpBtn" onclick="follow = true; toBottom(true)" title="ไปข้อความล่าสุด" aria-label="ไปข้อความล่าสุด">↓</button>
 
     <div class="composer-wrap">
       <div class="composer">
-        <textarea id="input" rows="1" placeholder="ถามเรื่อง SQL ได้เลย..." autocomplete="off"></textarea>
+        <textarea id="input" rows="1" placeholder="ถามเรื่องฐานข้อมูลหรือ SQL ได้เลย..." autocomplete="off"></textarea>
         <button class="btn solid send" id="sendBtn" onclick="sendMessage()" aria-label="ส่ง">↑</button>
       </div>
-      <div class="hint">Enter เพื่อส่ง · Shift+Enter ขึ้นบรรทัดใหม่ · ประวัติถูกเก็บไว้ในเบราว์เซอร์นี้</div>
+      <div class="hint">Enter เพื่อส่ง · Shift+Enter ขึ้นบรรทัดใหม่ · / ไปช่องพิมพ์ · Esc หยุด · ประวัติถูกเก็บไว้ในเบราว์เซอร์นี้</div>
     </div>
   </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script>
     const input = document.getElementById("input");
@@ -462,13 +512,34 @@
       toBottom();
       return el;
     }
-    function toBottom() { stream.scrollTop = stream.scrollHeight; }
+    /* เลื่อนตามคำตอบเฉพาะตอนผู้ใช้อยู่ล่างสุด ถ้าเลื่อนขึ้นไปอ่านเอง จะไม่ดึงกลับลงมา */
+    let follow = true;
+    const nearBottom = () => stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
+    function toBottom(force) {
+      if (!force && !follow) return;
+      stream.scrollTo({ top: stream.scrollHeight, behavior: force ? "smooth" : "instant" });
+    }
+    const userScrolledUp = () => { if (!nearBottom()) follow = false; };
+    stream.addEventListener("wheel", e => { if (e.deltaY < 0) follow = false; }, { passive: true });
+    stream.addEventListener("touchmove", () => requestAnimationFrame(userScrolledUp), { passive: true });
+    stream.addEventListener("scroll", () => {
+      if (nearBottom()) follow = true;
+      document.getElementById("jumpBtn").classList.toggle("show", !nearBottom());
+    }, { passive: true });
 
-    const STARTERS = ["SELECT ใช้ยังไง", "INNER JOIN กับ LEFT JOIN ต่างกันยังไง",
-                      "PRIMARY KEY คืออะไร", "GROUP BY กับ HAVING ต่างกันตรงไหน"];
+    function toast(msg) {
+      const t = document.getElementById("toast");
+      t.textContent = msg; t.classList.add("show");
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => t.classList.remove("show"), 1600);
+    }
+
+    const STARTERS = ["คีย์หลัก (Primary Key) คืออะไร", "ER Diagram คืออะไร", "นอมอลฟอร์มระดับที่ 3 (3NF)",
+                      "INNER JOIN กับ LEFT JOIN ต่างกันยังไง", "GROUP BY กับ HAVING ใช้ยังไง", "Big Data คืออะไร"];
 
     function welcome() {
-      const el = addTurn("สวัสดีครับ ผมเป็นผู้เชี่ยวชาญด้าน SQL และฐานข้อมูล\n\nผมตอบจากคลังความรู้ที่มีเท่านั้น ถ้าเรื่องไหนไม่มีในคลัง ผมจะบอกตรง ๆ ครับ", "bot");
+      const el = addTurn("สวัสดีครับ ผมครูเอสคิว ถามเรื่องฐานข้อมูลและ SQL ได้เลยครับ\n\n" +
+        "ผมตอบจากตำรา **การจัดการระบบฐานข้อมูลเพื่องานธุรกิจ** เท่านั้น ถ้าเรื่องไหนตำราไม่มี ผมจะบอกว่าไม่มีข้อมูลครับ", "bot");
       const box = document.createElement("div");
       box.className = "starters";
       STARTERS.forEach(q => {
@@ -485,9 +556,12 @@
       turns.innerHTML = "";
       const c = current();
       if (c && c.history.length) {
+        let question = "";
         c.history.forEach(m => {
           const el = addTurn(m.content, m.role === "user" ? "user" : "bot");
-          if (m.role !== "user") addTools(el, m.content, null);
+          if (m.role === "user") { question = m.content; return; }
+          markTerms(el.querySelector(".body"), question);
+          addTools(el, m.content, null);
         });
       } else {
         welcome();
@@ -596,11 +670,23 @@
       const copy = document.createElement("button");
       copy.className = "tool"; copy.textContent = "คัดลอก";
       copy.onclick = () => {
-        navigator.clipboard.writeText(text);
-        copy.textContent = "คัดลอกแล้ว";
-        setTimeout(() => { copy.textContent = "คัดลอก"; }, 1500);
+        navigator.clipboard.writeText(text).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
       };
       box.appendChild(copy);
+      if ("speechSynthesis" in window) {
+        const listen = document.createElement("button");
+        listen.className = "tool"; listen.textContent = "ฟัง";
+        listen.onclick = () => speak(text, listen);
+        box.appendChild(listen);
+      }
+      // เวลาอ่านโดยประมาณ (ภาษาไทยราว 700 ตัวอักษรต่อนาที) แสดงเฉพาะคำตอบยาว
+      const plain = speechText(text);
+      if (plain.length > 600) {
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent = "อ่านราว " + Math.max(1, Math.round(plain.length / 700)) + " นาที";
+        box.appendChild(meta);
+      }
       if (onRetry) {
         const again = document.createElement("button");
         again.className = "tool"; again.textContent = "ถามใหม่";
@@ -611,31 +697,136 @@
     }
 
     /* คำตอบมาจากเซิร์ฟเวอร์ทีเดียวทั้งก้อน ค่อย ๆ แสดงทีละช่วงให้เหมือนกำลังพิมพ์
-       ตั้งความเร็วตามความยาว คำตอบยาวแค่ไหนก็พิมพ์จบในราว 4 วินาที กดหยุดแล้วขึ้นครบทันที */
+       ความเร็วคิดตามเวลาจริง: อย่างน้อย 40 ตัวอักษร/วินาที และคำตอบยาวพิมพ์จบในราว 8 วินาที
+       กดข้าม, คลิกที่คำตอบ, กด Esc หรือปุ่มหยุด แล้วขึ้นครบทันที */
     const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
     // สระบน/ล่างและวรรณยุกต์ไทย ห้ามตัดก่อนตัวพวกนี้ ไม่งั้นจะเห็นสระลอยชั่วขณะ
-    const THAI_MARK = /[ัิ-ฺ็-๎]/;
+    const THAI_MARK = /[\u0E31\u0E34-\u0E3A\u0E47-\u0E4E]/;
+    let skipTyping = null;
 
-    function typeOut(body, full, signal) {
+    function typeOut(el, body, full, signal) {
       if (REDUCED_MOTION || full.length < 40) {
         body.innerHTML = renderMarkdown(full);
         toBottom();
         return Promise.resolve();
       }
-      const step = Math.max(2, Math.ceil(full.length / 240));
-      let shown = 0;
+      const bar = document.createElement("div");
+      bar.className = "typebar";
+      bar.innerHTML = '<div class="track"><div class="fill"></div></div><button class="tool">ข้าม ›</button>';
+      el.appendChild(bar);
+      el.classList.add("typing-now");
+      const fill = bar.querySelector(".fill");
+      const cps = Math.max(40, full.length / 8);
+      let shown = 0, last = null, skip = false;
+      skipTyping = () => { skip = true; };
+      bar.querySelector("button").onclick = skipTyping;
+      body.onclick = skipTyping;
+
       return new Promise(resolve => {
-        const frame = () => {
-          if (signal.aborted) shown = full.length;
-          shown = Math.min(full.length, shown + step);
-          while (shown < full.length && THAI_MARK.test(full[shown])) shown++;
-          const done = shown >= full.length;
-          body.innerHTML = renderMarkdown(full.slice(0, shown)) + (done ? "" : '<span class="caret"></span>');
+        const frame = ts => {
+          if (last !== null) shown += (ts - last) / 1000 * cps;
+          last = ts;
+          if (skip || signal.aborted) shown = full.length;
+          let n = Math.min(full.length, Math.floor(shown));
+          while (n < full.length && THAI_MARK.test(full[n])) n++;
+          shown = Math.max(shown, n);
+          const done = n >= full.length;
+          body.innerHTML = renderMarkdown(full.slice(0, n)) + (done ? "" : '<span class="caret"></span>');
+          fill.style.width = (100 * n / full.length) + "%";
           toBottom();
-          if (done) resolve(); else requestAnimationFrame(frame);
+          if (!done) { requestAnimationFrame(frame); return; }
+          bar.remove();
+          el.classList.remove("typing-now");
+          body.onclick = null;
+          skipTyping = null;
+          resolve();
         };
         requestAnimationFrame(frame);
       });
+    }
+
+    /* ไฮไลต์คำจากคำถามในคำตอบ (ไม่แตะบล็อกโค้ดและหัวข้อ) */
+    const ASK_NOISE = /คืออะไร|อะไรบ้าง|อะไร|ยังไงบ้าง|ยังไง|อย่างไร|ต่างกัน|ตรงไหน|ใช้ยังไง|ช่วย|อธิบาย|หน่อย|ครับ|ค่ะ|คะ|ไหม|และ|หรือ|กับ|ของ|ที่|การ/g;
+    const ASK_STOP = new Set(["sql", "the", "what", "how", "is", "and", "or", "of", "in", "to"]);
+
+    function markTerms(body, question) {
+      if (!body || !question) return;
+      const terms = new Set();
+      (question.match(/[A-Za-z][A-Za-z0-9_]*(?:\s+[A-Za-z][A-Za-z0-9_]*)*/g) || []).forEach(phrase => {
+        if (!ASK_STOP.has(phrase.toLowerCase()) && phrase.length >= 2) terms.add(phrase);
+      });
+      (question.replace(/[A-Za-z0-9_()\[\]?.,:;!"'\/-]+/g, " ").replace(ASK_NOISE, " ").match(/[\u0E00-\u0E7F]{3,}/g) || [])
+        .forEach(w => terms.add(w));
+      if (!terms.size) return;
+      const esc = [...terms].sort((a, b) => b.length - a.length).map(t => t.replace(/[.*+?^$()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
+      const re = new RegExp(esc.join("|"), "gi");
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
+        acceptNode: n => n.parentElement.closest("pre, code, h3, h4, h5, h6, .turn-tools") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+      });
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      nodes.forEach(node => {
+        const text = node.nodeValue;
+        re.lastIndex = 0;
+        if (!re.test(text)) return;
+        re.lastIndex = 0;
+        const frag = document.createDocumentFragment();
+        let last = 0, m;
+        while ((m = re.exec(text)) !== null) {
+          if (!m[0]) { re.lastIndex++; continue; }
+          frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+          const mark = document.createElement("mark");
+          mark.className = "hit"; mark.textContent = m[0];
+          frag.appendChild(mark);
+          last = m.index + m[0].length;
+        }
+        frag.appendChild(document.createTextNode(text.slice(last)));
+        node.replaceWith(frag);
+      });
+    }
+
+    /* อ่านออกเสียงภาษาไทย: ข้ามโค้ด SQL และตัดเป็นช่วงสั้น ๆ เพราะเบราว์เซอร์บางตัวหยุดอ่านข้อความยาว */
+    function speechText(text) {
+      return text
+        .replace(/```[\s\S]*?```/g, "\n(ตัวอย่างคำสั่ง SQL)\n")
+        .replace(/^แหล่งข้อมูล:.*$/gm, "")
+        .replace(/^#+\s*/gm, "")
+        .replace(/^\s*[-*]{3,}\s*$/gm, "")
+        .replace(/ \| /g, ", ")
+        .replace(/\*\*/g, "")
+        .replace(/\n{2,}/g, "\n").trim();
+    }
+    let speakingBtn = null;
+    function speak(text, btn) {
+      const synth = window.speechSynthesis;
+      const again = speakingBtn === btn;
+      synth.cancel();
+      if (speakingBtn) { speakingBtn.textContent = "ฟัง"; speakingBtn.classList.remove("on"); speakingBtn = null; }
+      if (again) return;   // กดซ้ำที่ปุ่มเดิม = หยุด
+      const chunks = speechText(text).split(/\n|(?<=[.!?])\s+/).map(t => t.trim()).filter(Boolean);
+      if (!chunks.length) return;
+      const voice = synth.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith("th"));
+      if (!voice) toast("เครื่องนี้อาจไม่มีเสียงภาษาไทย");
+      speakingBtn = btn; btn.textContent = "หยุดฟัง"; btn.classList.add("on");
+      chunks.forEach((chunk, i) => {
+        const u = new SpeechSynthesisUtterance(chunk);
+        u.lang = "th-TH"; if (voice) u.voice = voice;
+        if (i === chunks.length - 1) u.onend = () => {
+          if (speakingBtn === btn) { btn.textContent = "ฟัง"; btn.classList.remove("on"); speakingBtn = null; }
+        };
+        synth.speak(u);
+      });
+    }
+
+    /* ขนาดตัวอักษร */
+    const FONT_SIZES = [13, 14, 15, 16, 17, 18, 20];
+    let fontIndex = 2;
+    function applyFont() { turns.style.setProperty("--fs", FONT_SIZES[fontIndex] + "px"); }
+    function changeFont(delta) {
+      fontIndex = Math.max(0, Math.min(FONT_SIZES.length - 1, fontIndex + delta));
+      applyFont();
+      try { localStorage.setItem("chsql.font", String(fontIndex)); } catch (e) {}
+      toast("ขนาดตัวอักษร " + FONT_SIZES[fontIndex] + "px");
     }
 
     async function ask(text, replaceLast) {
@@ -646,6 +837,7 @@
       if (replaceLast) history = history.slice(0, -2);   // ถามใหม่: ตัดคู่ถาม-ตอบเดิมออก
       if (!history.length) turns.innerHTML = "";
 
+      follow = true;
       if (!replaceLast) addTurn(text, "user");
 
       const el = document.createElement("div");
@@ -678,7 +870,8 @@
         const body = document.createElement("div");
         body.className = "body";
         el.querySelector(".typing").replaceWith(body);
-        await typeOut(body, reply, controller.signal);
+        await typeOut(el, body, reply, controller.signal);
+        markTerms(body, text);
       } catch (err) {
         stopped = err && err.name === "AbortError";
         if (!reply) {
@@ -705,6 +898,16 @@
       if (!isTouch) input.focus();
     }
 
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        if (skipTyping) skipTyping();
+        else if (busy && controller) controller.abort();
+        return;
+      }
+      const typingInField = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+      if (e.key === "/" && !typingInField) { e.preventDefault(); input.focus(); }
+    });
+
     function sendMessage() {
       if (busy) { if (controller) controller.abort(); return; }   // กดซ้ำ = หยุด
       const text = input.value.trim();
@@ -718,6 +921,12 @@
       let saved = null;
       try { saved = localStorage.getItem("chsql.theme"); } catch (e) {}
       applyTheme(saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches);
+
+      try {
+        const f = parseInt(localStorage.getItem("chsql.font"), 10);
+        if (f >= 0 && f < FONT_SIZES.length) fontIndex = f;
+      } catch (e) {}
+      applyFont();
 
       load();
       if (!state.activeId) state.activeId = newId();
