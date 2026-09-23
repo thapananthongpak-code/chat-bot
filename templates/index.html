@@ -361,6 +361,8 @@
         "</tbody></table></div>";
     }
 
+    const CELL_SEP = /\S \| \S/;
+
     function renderText(text) {
       const lines = text.split("\n");
       let html = "", i = 0;
@@ -377,6 +379,17 @@
           i++; continue;
         }
 
+        // แถวตารางจากตำรา: ช่องคั่นด้วย " | " ตั้งแต่สองแถวติดกันขึ้นไป แถวแรกเป็นหัวตาราง
+        if (CELL_SEP.test(line) && i + 1 < lines.length && CELL_SEP.test(lines[i + 1])) {
+          const rows = [];
+          while (i < lines.length && CELL_SEP.test(lines[i])) { rows.push(lines[i].split(" | ").map(c => c.trim())); i++; }
+          html += '<div class="table-wrap"><table><thead><tr>' +
+            rows[0].map(c => "<th>" + inline(c) + "</th>").join("") + "</tr></thead><tbody>" +
+            rows.slice(1).map(r => "<tr>" + r.map(c => "<td>" + inline(c) + "</td>").join("") + "</tr>").join("") +
+            "</tbody></table></div>";
+          continue;
+        }
+
         if (line.trim().startsWith("|")) {
           const rows = [];
           while (i < lines.length && lines[i].trim().startsWith("|")) { rows.push(lines[i].trim()); i++; }
@@ -387,24 +400,28 @@
         const bullet = /^\s*[-*+]\s+/, numbered = /^\s*\d+[.)]\s+/;
         if (bullet.test(line) || numbered.test(line)) {
           const ordered = numbered.test(line);
+          // คงเลขข้อตามตำรา เช่นรายการที่เริ่มที่ 3) ไม่ให้กลายเป็น 1.
+          const start = ordered ? parseInt(line.trim(), 10) : 1;
           const items = [];
           while (i < lines.length && (bullet.test(lines[i]) || numbered.test(lines[i]))) {
             items.push(lines[i].replace(bullet, "").replace(numbered, ""));
             i++;
           }
           const tag = ordered ? "ol" : "ul";
-          html += `<${tag}>` + items.map(t => "<li>" + inline(t) + "</li>").join("") + `</${tag}>`;
+          html += (ordered && start > 1 ? `<ol start="${start}">` : `<${tag}>`) + items.map(t => "<li>" + inline(t) + "</li>").join("") + `</${tag}>`;
           continue;
         }
 
         const para = [];
         while (i < lines.length && lines[i].trim() &&
                !lines[i].trim().startsWith("|") && !/^#{1,4}\s/.test(lines[i]) &&
+               !(CELL_SEP.test(lines[i]) && CELL_SEP.test(lines[i + 1] || "")) &&
                !bullet.test(lines[i]) && !numbered.test(lines[i]) &&
                !/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])) {
           para.push(lines[i]); i++;
         }
-        html += "<p>" + para.map(inline).join("<br>") + "</p>";
+        // ข้อความจากตำราถูกจัดเป็นหนึ่งย่อหน้าต่อบรรทัดแล้ว จึงแยกเป็นคนละย่อหน้า
+        html += para.map(p => "<p>" + inline(p) + "</p>").join("");
       }
       return html;
     }
@@ -593,6 +610,34 @@
       el.appendChild(box);
     }
 
+    /* คำตอบมาจากเซิร์ฟเวอร์ทีเดียวทั้งก้อน ค่อย ๆ แสดงทีละช่วงให้เหมือนกำลังพิมพ์
+       ตั้งความเร็วตามความยาว คำตอบยาวแค่ไหนก็พิมพ์จบในราว 4 วินาที กดหยุดแล้วขึ้นครบทันที */
+    const REDUCED_MOTION = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // สระบน/ล่างและวรรณยุกต์ไทย ห้ามตัดก่อนตัวพวกนี้ ไม่งั้นจะเห็นสระลอยชั่วขณะ
+    const THAI_MARK = /[ัิ-ฺ็-๎]/;
+
+    function typeOut(body, full, signal) {
+      if (REDUCED_MOTION || full.length < 40) {
+        body.innerHTML = renderMarkdown(full);
+        toBottom();
+        return Promise.resolve();
+      }
+      const step = Math.max(2, Math.ceil(full.length / 240));
+      let shown = 0;
+      return new Promise(resolve => {
+        const frame = () => {
+          if (signal.aborted) shown = full.length;
+          shown = Math.min(full.length, shown + step);
+          while (shown < full.length && THAI_MARK.test(full[shown])) shown++;
+          const done = shown >= full.length;
+          body.innerHTML = renderMarkdown(full.slice(0, shown)) + (done ? "" : '<span class="caret"></span>');
+          toBottom();
+          if (done) resolve(); else requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      });
+    }
+
     async function ask(text, replaceLast) {
       if (busy) return;
       const id = state.activeId;
@@ -623,26 +668,17 @@
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();   // stream:true กัน UTF-8 ไทยขาดกลางตัวอักษร
-        const body = document.createElement("div");
-        body.className = "body";
-        let started = false, pending = false;
-
-        const draw = () => {
-          body.innerHTML = renderMarkdown(reply) + (busy ? '<span class="caret"></span>' : '');
-          toBottom();
-          pending = false;
-        };
-
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           reply += decoder.decode(value, { stream: true });
-          if (!started) { el.querySelector(".typing").replaceWith(body); started = true; }
-          if (!pending) { pending = true; requestAnimationFrame(draw); }
         }
         reply += decoder.decode();
-        body.innerHTML = renderMarkdown(reply);
-        if (!started) el.querySelector(".typing").replaceWith(body);
+
+        const body = document.createElement("div");
+        body.className = "body";
+        el.querySelector(".typing").replaceWith(body);
+        await typeOut(body, reply, controller.signal);
       } catch (err) {
         stopped = err && err.name === "AbortError";
         if (!reply) {
