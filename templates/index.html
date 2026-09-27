@@ -347,7 +347,17 @@
        เบราว์เซอร์เก็บบทสนทนา "เต็ม" ไว้ใน localStorage เป็นหลัก จึงไม่หายเมื่อรีเฟรช
        และยังส่งไปเก็บที่เซิร์ฟเวอร์ (data/web_<id>.json) เมื่อเขียนไฟล์ได้ */
     function save() {
-      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+      for (;;) {
+        try { localStorage.setItem(KEY, JSON.stringify(state)); return; }
+        catch (e) {
+          const old = Object.values(state.chats)
+            .filter(c => c.id !== state.activeId)
+            .sort((a, b) => (a.updated || "").localeCompare(b.updated || ""))[0];
+          if (!old) return;   // เหลือแชตเดียวแล้วยังเต็ม หรือเบราว์เซอร์ไม่ให้ใช้ localStorage
+          delete state.chats[old.id];
+          if (!save.warned) { save.warned = true; setTimeout(() => toast("พื้นที่เก็บประวัติเต็ม ลบแชตเก่าสุดออกให้แล้ว"), 0); }
+        }
+      }
     }
     function load() {
       try {
@@ -392,7 +402,7 @@
       return escapeHtml(text)
         .replace(/`([^`]+)`/g, '<code class="inline">$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(/https:\/\/[^\s<>]+/g, url => '<a href="' + url + '" target="_blank" rel="noopener noreferrer">อ่านเอกสารต้นทาง ↗</a>');
+        .replace(/https?:\/\/[^\s<>]+/g, url => '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>');
     }
 
     function renderTable(rows) {
@@ -410,7 +420,15 @@
     const CELL_SEP = /\S \| \S/;
 
     function renderText(text) {
-      const lines = text.split("\n");
+      // ไฟล์ความรู้ใส่ \ หน้า # ที่ต้นบรรทัดไว้ ไม่ให้ชนกับตัวแบ่งหัวข้อ: แสดงเป็น # ตามตำรา และไม่นับเป็นหัวข้อ
+      const raw = text.split("\n");
+      const escaped = raw.map(l => l.startsWith("\\#"));
+      const lines = raw.map((l, k) => escaped[k] ? l.slice(1) : l);
+      // บรรทัดที่มี " | " เป็นแถวจากตำรา เช่น "- | ใช้แทนค่า…" ห้ามตีความเป็นรายการ ไม่งั้นสัญลักษณ์ - หายไป
+      const isRow = k => CELL_SEP.test(lines[k] || "");
+      const bullet = /^\s*[-*+]\s+/, numbered = /^\s*\d+[.)]\s+/;
+      const isHeading = k => !escaped[k] && !isRow(k) && /^#{1,4}\s/.test(lines[k]);
+      const isItem = k => !isRow(k) && (bullet.test(lines[k]) || numbered.test(lines[k]));
       let html = "", i = 0;
       while (i < lines.length) {
         const line = lines[i];
@@ -418,7 +436,7 @@
 
         if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { html += "<hr>"; i++; continue; }
 
-        const heading = line.match(/^(#{1,4})\s+(.*)$/);
+        const heading = isHeading(i) && line.match(/^(#{1,4})\s+(.*)$/);
         if (heading) {
           const level = Math.min(heading[1].length + 2, 6);
           html += `<h${level}>${inline(heading[2])}</h${level}>`;
@@ -443,29 +461,28 @@
           continue;
         }
 
-        const bullet = /^\s*[-*+]\s+/, numbered = /^\s*\d+[.)]\s+/;
-        if (bullet.test(line) || numbered.test(line)) {
+        if (isItem(i)) {
           const ordered = numbered.test(line);
-          // คงเลขข้อตามตำรา เช่นรายการที่เริ่มที่ 3) ไม่ให้กลายเป็น 1.
-          const start = ordered ? parseInt(line.trim(), 10) : 1;
           const items = [];
-          while (i < lines.length && (bullet.test(lines[i]) || numbered.test(lines[i]))) {
-            items.push(lines[i].replace(bullet, "").replace(numbered, ""));
+          while (i < lines.length && isItem(i)) {
+            // คงเลขข้อตามตำราทุกข้อ (ตำรามีรายการที่เริ่มนับ 1 ใหม่ติดกัน เช่น 1) 2) 3) 1) 2))
+            const n = numbered.test(lines[i]) ? parseInt(lines[i].trim(), 10) : null;
+            items.push({ n, t: lines[i].replace(bullet, "").replace(numbered, "") });
             i++;
           }
           const tag = ordered ? "ol" : "ul";
-          html += (ordered && start > 1 ? `<ol start="${start}">` : `<${tag}>`) + items.map(t => "<li>" + inline(t) + "</li>").join("") + `</${tag}>`;
+          html += `<${tag}>` + items.map(it => (ordered && it.n !== null ? `<li value="${it.n}">` : "<li>") + inline(it.t) + "</li>").join("") + `</${tag}>`;
           continue;
         }
 
         const para = [];
         while (i < lines.length && lines[i].trim() &&
-               !lines[i].trim().startsWith("|") && !/^#{1,4}\s/.test(lines[i]) &&
-               !(CELL_SEP.test(lines[i]) && CELL_SEP.test(lines[i + 1] || "")) &&
-               !bullet.test(lines[i]) && !numbered.test(lines[i]) &&
+               !lines[i].trim().startsWith("|") && !isHeading(i) &&
+               !(isRow(i) && isRow(i + 1)) && !isItem(i) &&
                !/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])) {
           para.push(lines[i]); i++;
         }
+        if (!para.length) { html += "<p>" + inline(lines[i]) + "</p>"; i++; continue; }
         // ข้อความจากตำราถูกจัดเป็นหนึ่งย่อหน้าต่อบรรทัดแล้ว จึงแยกเป็นคนละย่อหน้า
         html += para.map(p => "<p>" + inline(p) + "</p>").join("");
       }
@@ -486,11 +503,26 @@
       }).join("");
     }
 
+    function copyText(text) {
+      if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      return new Promise((resolve, reject) => {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.setAttribute("readonly", "");
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+        document.body.appendChild(ta); ta.select();
+        let ok = false;
+        try { ok = document.execCommand("copy"); } catch (e) {}
+        ta.remove();
+        ok ? resolve() : reject(new Error("copy failed"));
+      });
+    }
+
     function copyCode(btn) {
       const code = btn.closest(".code-block").querySelector("code").innerText;
-      navigator.clipboard.writeText(code);
-      btn.textContent = "คัดลอกแล้ว";
-      setTimeout(() => { btn.textContent = "คัดลอก"; }, 1500);
+      copyText(code).then(() => {
+        btn.textContent = "คัดลอกแล้ว";
+        setTimeout(() => { btn.textContent = "คัดลอก"; }, 1500);
+      }, () => toast("คัดลอกไม่สำเร็จ"));
     }
 
     /* ================= แสดงผลบทสนทนา ================= */
@@ -518,9 +550,10 @@
     const userScrolledUp = () => { if (!nearBottom()) follow = false; };
     stream.addEventListener("wheel", e => { if (e.deltaY < 0) follow = false; }, { passive: true });
     stream.addEventListener("touchmove", () => requestAnimationFrame(userScrolledUp), { passive: true });
+    function updateJump() { document.getElementById("jumpBtn").classList.toggle("show", !nearBottom()); }
     stream.addEventListener("scroll", () => {
       if (nearBottom()) follow = true;
-      document.getElementById("jumpBtn").classList.toggle("show", !nearBottom());
+      updateJump();
     }, { passive: true });
 
     function toast(msg) {
@@ -549,6 +582,7 @@
     }
 
     function paint() {
+      stopSpeaking();
       turns.innerHTML = "";
       const c = current();
       if (c && c.history.length) {
@@ -564,6 +598,8 @@
       }
       document.getElementById("chatTitle").textContent = c && c.history.length ? c.title : "แชทใหม่";
       paintList();
+      follow = true;
+      requestAnimationFrame(updateJump);
     }
 
     function timeAgo(iso) {
@@ -659,7 +695,7 @@
       const copy = document.createElement("button");
       copy.className = "tool"; copy.textContent = "คัดลอก";
       copy.onclick = () => {
-        navigator.clipboard.writeText(text).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
+        copyText(text).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
       };
       box.appendChild(copy);
       if ("speechSynthesis" in window) {
@@ -786,6 +822,11 @@
         .replace(/\n{2,}/g, "\n").trim();
     }
     let speakingBtn = null;
+    if ("speechSynthesis" in window) speechSynthesis.getVoices();   // เริ่มโหลดรายชื่อเสียงไว้ก่อน
+    function stopSpeaking() {
+      if ("speechSynthesis" in window) speechSynthesis.cancel();
+      speakingBtn = null;
+    }
     function speak(text, btn) {
       const synth = window.speechSynthesis;
       const again = speakingBtn === btn;
@@ -794,8 +835,9 @@
       if (again) return;   // กดซ้ำที่ปุ่มเดิม = หยุด
       const chunks = speechText(text).split(/\n|(?<=[.!?])\s+/).map(t => t.trim()).filter(Boolean);
       if (!chunks.length) return;
-      const voice = synth.getVoices().find(v => v.lang && v.lang.toLowerCase().startsWith("th"));
-      if (!voice) toast("เครื่องนี้อาจไม่มีเสียงภาษาไทย");
+      const voices = synth.getVoices();
+      const voice = voices.find(v => v.lang && v.lang.toLowerCase().startsWith("th"));
+      if (voices.length && !voice) toast("เครื่องนี้อาจไม่มีเสียงภาษาไทย");
       speakingBtn = btn; btn.textContent = "หยุดฟัง"; btn.classList.add("on");
       chunks.forEach((chunk, i) => {
         const u = new SpeechSynthesisUtterance(chunk);

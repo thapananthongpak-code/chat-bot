@@ -79,10 +79,12 @@ def load_line_history(user_id, prefix="line"):
     path = os.path.join(DATA_DIR, f"{prefix}_{user_id}.json")
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
         # ไม่มีไฟล์ อ่านไม่ได้ หรือไฟล์เสีย — เริ่มบทสนทนาใหม่ ดีกว่าปล่อยให้ 500
         return []
+    # ไฟล์อ่านได้แต่รูปแบบผิด (เช่นเป็น dict) ก็กรองทิ้ง ไม่งั้นทุกข้อความของแชตนี้จะ 500 ตลอดไป
+    return clean_history(data)
 
 def save_line_history(user_id, history, prefix="line"):
     path = os.path.join(DATA_DIR, f"{prefix}_{user_id}.json")
@@ -127,9 +129,8 @@ def chat_stream():
     if not user_message:
         return jsonify({"error": "ยังไม่ได้พิมพ์คำถามครับ"}), 400
 
-    chat_id = (payload.get("chat_id") or "").strip()
-    saved = None
-    name = (payload.get("name") or "").strip()[:30] or (saved.get("name") if saved else "")
+    chat_id = str(payload.get("chat_id") or "").strip()
+    name = str(payload.get("name") or "").strip()[:30]
     history = clean_history(payload.get("history"))
     history = history + [{"role": "user", "content": user_message}]
 
@@ -169,6 +170,7 @@ def to_line_text(text, limit=4900):
     text = re.sub(r"^\s*\|[\s|:-]+\|\s*$", "", text, flags=re.M)  # เส้นคั่นตาราง |---|---|
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)               # หัวข้อ ## ###
     text = re.sub(r"^\s*[-*]{3,}\s*$", "", text, flags=re.M)         # เส้นคั่น ---
+    text = re.sub(r"^\\#", "#", text, flags=re.M)                     # \# ในไฟล์ความรู้ = # ตัวจริง
     text = text.replace("`", "").replace("**", "")
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) <= limit:
@@ -233,9 +235,12 @@ def telegram_webhook():
     given = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if not hmac.compare_digest(given, TELEGRAM_WEBHOOK_SECRET):
         abort(403)
-    message = (request.get_json(silent=True) or {}).get("message") or {}
-    chat_id = (message.get("chat") or {}).get("id")
-    text = (message.get("text") or "").strip()
+    update = request.get_json(silent=True)
+    message = update.get("message") if isinstance(update, dict) else None
+    chat = message.get("chat") if isinstance(message, dict) else None
+    chat_id = chat.get("id") if isinstance(chat, dict) else None
+    text = message.get("text") if isinstance(message, dict) else None
+    text = text.strip() if isinstance(text, str) else ""
     if not isinstance(chat_id, int) or not text:
         return "OK", 200  # สติกเกอร์ รูป หรือ update ชนิดอื่น — ข้ามไป
     if text.startswith("/start"):

@@ -1,9 +1,13 @@
 """Offline Telegram webhook checks: never contacts Telegram."""
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 with patch('dotenv.load_dotenv', return_value=False):
     import app as application
+
+REAL_LOAD = application.load_line_history
 
 
 class TelegramWebhook(unittest.TestCase):
@@ -38,6 +42,25 @@ class TelegramWebhook(unittest.TestCase):
         self.assertLessEqual(len(text), 4000)
         self.assertIn(application.TRIMMED_NOTE, text)
         self.assertIn('แหล่งข้อมูล:', text)
+
+    def test_malformed_updates_are_ignored(self):
+        for body in [[1], {'message': 'hi'}, {'message': {'chat': 5, 'text': 'x'}},
+                     {'message': {'chat': {'id': 1}, 'text': 5}}]:
+            with self.subTest(body=body):
+                self.assertEqual(self.post(body).status_code, 200)
+        self.assertEqual(self.sent, [])
+
+    def test_corrupted_history_file_still_answers(self):
+        # ไฟล์ประวัติเสียเคยทำให้ทุกข้อความของแชตนั้น 500 ตลอดไป
+        with tempfile.TemporaryDirectory() as tmp, patch.object(application, 'DATA_DIR', tmp), \
+                patch.object(application, 'load_line_history', REAL_LOAD):
+            for chat_id, bad in [(9, '{"a": 1}'), (10, '[1, 2, "x"]'), (11, 'not json')]:
+                with self.subTest(bad=bad):
+                    Path(tmp, f'tg_{chat_id}.json').write_text(bad, encoding='utf-8')
+                    self.sent.clear()
+                    r = self.post({'message': {'chat': {'id': chat_id}, 'text': 'GROUP BY'}})
+                    self.assertEqual(r.status_code, 200)
+                    self.assertIn('GROUP BY', self.sent[0][1])
 
     def test_rejects_wrong_secret(self):
         self.assertEqual(self.post({'message': {'chat': {'id': 1}, 'text': 'x'}}, secret='bad').status_code, 403)

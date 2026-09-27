@@ -22,7 +22,9 @@ class DatasetTests(unittest.TestCase):
         # รวมเรื่อง SQL ที่ตำราไม่ได้อธิบาย แม้บางคำจะโผล่ในเนื้อหา (เช่น Transaction ในตาราง)
         for query in ['ราคาทองวันนี้', 'weather today', 'เขียนเพลงรัก', 'quantum computer คืออะไร',
                       'วิธีทำต้มยำกุ้ง', 'ฟุตบอลคืนนี้ใครชนะ', 'python list comprehension',
-                      'CTE', 'ROW_NUMBER', 'Transaction', 'stored procedure', 'SQL Injection']:
+                      'CTE', 'ROW_NUMBER', 'Transaction', 'stored procedure', 'SQL Injection',
+                      # ชื่อระบบที่มีคำว่า sql ไม่ใช่คำถาม "SQL คืออะไร" และภาคผนวกที่ตำราไม่มี
+                      'MySQL คืออะไร', 'NoSQL คืออะไร', 'what is sqlite', 'PostgreSQL คืออะไร', 'ภาคผนวก ค']:
             with self.subTest(query=query):
                 self.assertEqual(kb.search(query), [])
                 self.assertEqual(kb.answer_from_dataset([{'role': 'user', 'content': query}]), kb.NO_DATA)

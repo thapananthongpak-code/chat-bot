@@ -313,9 +313,11 @@ def search(query, limit=6, min_score=1.0):
         by_num = [e for e in ENTRIES if e["topic"].startswith(num.group(1) + " ")]
         if by_num:
             return by_num[:1]
-    if re.search(r"(?:what is sql|sql คืออะไร|ภาษา sql คือ|ความหมายของภาษา sql)", text):
+    if re.search(r"(?:what is sql\b|(?<![\w-])sql คืออะไร|ภาษา sql คือ|ความหมายของภาษา sql)", text):
         return [e for e in ENTRIES if e["topic"].startswith("8.1 ")][:1]
 
+    if re.search(r"ภาคผนวก\s*[ค-ฮ]", text):
+        return []   # ตำรามีแค่ภาคผนวก ก และ ข
     chapter = re.search(r"บทที่\s*(\d{1,2})|ภาคผนวก\s*([กข])", text)
     pool = ENTRIES
     if chapter:
@@ -368,7 +370,7 @@ def answer_from_dataset(history):
     ENTRIES = load_entries()
     if DATASET_ERROR:
         return DATASET_ERROR
-    questions = [m["content"] for m in history if m.get("role") == "user"]
+    questions = [str(m.get("content") or "") for m in history if isinstance(m, dict) and m.get("role") == "user"]
     query = questions[-1] if questions else ""
     entries = search(query, limit=2)
     if not entries and len(questions) > 1 and query.startswith(("แล้ว", "ขอตัวอย่าง", "อธิบายต่อ")):

@@ -22,5 +22,12 @@ class HandbookRoutes(unittest.TestCase):
             self.assertIn('HAVING', text)
 
 
+    def test_non_string_ids_do_not_crash(self):
+        with application.app.test_client() as client, patch.object(application, 'save_web_chat'):
+            for payload in [{'message': 'GROUP BY', 'chat_id': 12345678}, {'message': 'GROUP BY', 'name': 5}]:
+                with self.subTest(payload=payload):
+                    self.assertEqual(client.post('/chat/stream', json=payload).status_code, 200)
+
+
 if __name__ == '__main__':
     unittest.main()

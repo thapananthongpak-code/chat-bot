@@ -41,10 +41,11 @@
 
 ## การทดสอบ
 
-`./venv/bin/python -m unittest test_knowledge test_handbook_app test_dataset_only test_telegram -v` ผ่าน 17 tests
+`./venv/bin/python -m unittest test_knowledge test_handbook_app test_dataset_only test_telegram -v` ผ่าน 20 tests
 ตรวจทุกหัวข้อว่าคำตอบมีเฉพาะ stored fields, ไม่ทำตาม prompt injection ที่ทดสอบ,
-หยุดตอบเมื่อไฟล์หายหรือ checksum ไม่ตรง, คำถามนอกตำรา 12 ข้อ (รวม CTE, Transaction, SQL Injection) ได้ "ไม่มีข้อมูล",
+หยุดตอบเมื่อไฟล์หายหรือ checksum ไม่ตรง, คำถามนอกตำรา 17 ข้อ (รวม CTE, Transaction, SQL Injection, MySQL, NoSQL, ภาคผนวก ค) ได้ "ไม่มีข้อมูล",
 คำถามจริง 15 ข้อเลือกหัวข้อถูก และคำตอบยาวบน Telegram ไม่เกิน 4000 ตัวอักษร
+ข้อมูลผิดรูปแบบ (chat_id เป็นตัวเลข, update ของ Telegram แปลก ๆ, ไฟล์ประวัติเสีย) ไม่ทำให้เซิร์ฟเวอร์ 500
 ทดลองคำถามเพิ่มอีก ~90 ข้อระหว่างพัฒนา ข้อที่ยังพลาด เช่น "ตั้งรหัสผ่าน Access" ได้ภาคผนวก ข แทนหัวข้อ 12.5
 
 ## แก้ไขเนื้อหาในอนาคต
