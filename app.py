@@ -55,7 +55,8 @@ def clean_history(raw):
     if not isinstance(raw, list):
         return []
     return [
-        {"role": m.get("role"), "content": str(m.get("content") or "")[:8000]}
+        # ยาวพอสำหรับคำตอบที่ยาวที่สุด (~22,000 ตัวอักษร) บอทใช้ประวัตินี้จำว่าคุยเรื่องอะไรและแสดงอะไรไปแล้ว
+        {"role": m.get("role"), "content": str(m.get("content") or "")[:30000]}
         for m in (raw or [])[-MAX_HISTORY:]
         if isinstance(m, dict) and m.get("role") in ("user", "assistant") and m.get("content")
     ]

@@ -184,6 +184,7 @@
       border-radius: 999px; padding: 8px 14px; transition: background .16s;
     }
     .starter:hover { background: var(--surface-2); }
+    .starters.related { margin-top: 12px; }
 
     /* ---------- ช่องพิมพ์ ---------- */
     .composer-wrap { flex-shrink: 0; padding: 0 22px calc(16px + env(safe-area-inset-bottom)); }
@@ -445,6 +446,12 @@
 
     const CELL_SEP = /\S \| \S/;
     const FIGURE_LINE = /^!\[([^\]]*)\]\((\/static\/figures\/[\w.-]+\.webp)\)$/;
+    const ASK_CHIP = /^\[\[ถาม:(.+)\]\]$/;
+
+    function askChip(btn) {
+      if (busy) return;
+      input.value = btn.dataset.q; grow(); sendMessage();
+    }
 
     function openFigure(btn) {
       const img = btn.querySelector("img");
@@ -471,6 +478,19 @@
         if (!line.trim()) { i++; continue; }
 
         if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { html += "<hr>"; i++; continue; }
+
+        // หัวข้อที่เกี่ยวข้อง [[ถาม:ชื่อหัวข้อ]] -> ปุ่มแตะเพื่อถามหัวข้อนั้น
+        if (line.startsWith("[[")) {
+          const chips = [];
+          while (i < lines.length && lines[i].startsWith("[[")) {
+            const c = lines[i].match(ASK_CHIP);
+            if (c) chips.push(c[1]);
+            i++;   // บรรทัดที่ยังพิมพ์ไม่ครบ (ระหว่างอนิเมชัน) ข้ามไปก่อน
+          }
+          if (chips.length) html += '<div class="starters related">' + chips.map(q =>
+            '<button type="button" class="starter" data-q="' + escapeHtml(q) + '" onclick="askChip(this)">' + escapeHtml(q) + "</button>").join("") + "</div>";
+          continue;
+        }
 
         // รูปประกอบจากตำรา ![ภาพที่ X.Y](/static/figures/…) รับเฉพาะรูปในโฟลเดอร์ของเราเอง
         if (line.startsWith("![")) {
@@ -518,7 +538,7 @@
 
         const para = [];
         while (i < lines.length && lines[i].trim() &&
-               !isHeading(i) && !lines[i].startsWith("![") &&
+               !isHeading(i) && !lines[i].startsWith("![") && !lines[i].startsWith("[[") &&
                !(isRow(i) && isRow(i + 1)) && !isItem(i) &&
                !/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])) {
           para.push(lines[i]); i++;
@@ -750,7 +770,7 @@
       const copy = document.createElement("button");
       copy.className = "tool"; copy.textContent = "คัดลอก";
       copy.onclick = () => {
-        copyText(text.replace(/^!\[[^\]]*\]\([^)]*\)\n?/gm, "")).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
+        copyText(text.replace(/^!\[[^\]]*\]\([^)]*\)\n?/gm, "").replace(/^\[\[ถาม:(.+)\]\]$/gm, "- $1")).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
       };
       box.appendChild(copy);
       if ("speechSynthesis" in window) {
@@ -835,7 +855,7 @@
       const esc = [...terms].sort((a, b) => b.length - a.length).map(t => t.replace(/[.*+?^$()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+"));
       const re = new RegExp(esc.join("|"), "gi");
       const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, {
-        acceptNode: n => n.parentElement.closest("pre, code, h3, h4, h5, h6, .turn-tools") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+        acceptNode: n => n.parentElement.closest("pre, code, h3, h4, h5, h6, .turn-tools, .starters") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
       });
       const nodes = [];
       while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -865,6 +885,7 @@
         .replace(/```[\s\S]*?```/g, "\n(ตัวอย่างคำสั่ง SQL)\n")
         .replace(/^แหล่งข้อมูล:.*$/gm, "")
         .replace(/^!\[[^\]]*\]\([^)]*\)$/gm, "")
+        .replace(/^\[\[ถาม:(.+)\]\]$/gm, "$1")
         .replace(/^#+\s*/gm, "")
         .replace(/^\s*[-*]{3,}\s*$/gm, "")
         .replace(/ \| /g, ", ")

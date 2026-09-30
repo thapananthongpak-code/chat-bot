@@ -395,6 +395,186 @@ def section_parts(entry):
     return [entry] + [e for e in ENTRIES if e["topic"].startswith(entry["topic"] + " · ")]
 
 
+# ---------------------------------------------------------------- บทสนทนาต่อเนื่อง
+# ถามต่อสั้น ๆ เช่น "ขอตัวอย่างเพิ่ม" "อธิบายเพิ่ม" "มันต่างกันยังไง" ต้องรู้ว่ากำลังคุยเรื่องอะไรอยู่
+# เรื่องที่คุยอยู่ = หัวข้อ (บรรทัด "## ") ในคำตอบล่าสุดของบอท ซึ่งเบราว์เซอร์ส่งประวัติมาทุกครั้ง
+_EXAMPLE_RE = re.compile(r"ตัวอย่าง|example", re.I)
+_MORE_RE = re.compile(r"อธิบายเพิ่ม|อธิบายต่อ|ขยายความ|ละเอียด|เพิ่มเติม|ข้อมูลเพิ่ม|มีอะไรอีก|อะไรอีก|มีอีก|อีกไหม|"
+                      r"เกี่ยวข้อง|เกี่ยวกับหัวข้อนี้|เกี่ยวกับเรื่องนี้|ต่อเลย|ต่อไป|เล่าต่อ|\bmore\b", re.I)
+_COMPARE_RE = re.compile(r"ต่างกัน|ต่างจาก|แตกต่าง|เทียบ|เหมือนกันไหม|\bvs\b", re.I)
+# ต่อจากคำตอบตัวอย่าง: "อีก" "มีอีกไหม" "ต่อ" สั้น ๆ = ขอตัวอย่างต่อ
+# (แต่ "เพิ่มเติมที่เกี่ยวกับหัวข้อนี้" "อธิบายเพิ่ม" = ขอหัวข้อที่เกี่ยวข้อง)
+_AGAIN_RE = re.compile(r"^(มี|ขอ|เอา)?(อีก|ต่อ)|อีก(ไหม|มั้ย|หน่อย|สิ|ครับ|ค่ะ)?$|\bmore\b", re.I)
+_RELATED_RE = re.compile(r"เกี่ยว|อธิบาย|ขยายความ|ละเอียด|หัวข้อ")
+# คำที่อ้างถึงเรื่องที่คุยอยู่ ("มันต่างจาก…", "เรื่องนี้…") ถ้าไม่มี ถือว่าเป็นคำถามใหม่ที่ครบในตัวเอง
+_BACKREF_RE = re.compile(r"มัน|อันนี้|อันนั้น|ตัวนี้|เรื่องนี้|หัวข้อนี้|ข้างบน|เมื่อกี้|ที่แล้ว|ก่อนหน้า|สองอัน|ทั้งสอง|\bit\b|\bthis\b", re.I)
+# คำที่ใช้ถามต่อ ตัดทิ้งก่อนดูว่าผู้ใช้เอ่ยถึงหัวข้อใหม่ไหม
+_FOLLOW_WORDS = re.compile(
+    r"ขอ|ยก|เอา|ดู|ตัวอย่าง|example|อธิบาย|เพิ่มเติม|เพิ่ม|ขยายความ|ละเอียด|ข้อมูล|อีก|ไหม|หน่อย|ต่อ|เลย|ไป|"
+    r"เล่า|เกี่ยวข้อง|เกี่ยวกับ|หัวข้อ|เรื่อง|นี้|นั้น|มัน|อันนี้|แล้ว|ล่ะ|ต่างกัน|ต่างจาก|แตกต่าง|เทียบ|"
+    r"เหมือนกัน|ยังไง|อย่างไร|อะไร|มี|บ้าง|ครับ|ค่ะ|คะ|นะ|จ้า|\bmore\b|\bvs\b|[\s?!.,ๆ]+", re.I)
+_GENERIC_TERMS = {"sql", "table", "microsoft access", "access", "data", "er", "a", "b", "fk"}
+EXAMPLES_PER_ANSWER = 3
+
+
+def _answer_topics(text):
+    return [line[3:].strip() for line in text.split("\n") if line.startswith("## ")]
+
+
+def conversation_context(history):
+    """หัวข้อในคำตอบล่าสุดที่เป็นเนื้อหาจากตำรา (ข้ามคำตอบคงที่/รายการตัวอย่าง ซึ่งไม่มีบรรทัด "## ")
+    คืน (หัวข้อล่าสุด, หัวข้อก่อนหน้าที่ต่างออกไป, ข้อความที่บอทเคยแสดงแล้วทั้งหมด)"""
+    by_topic = {e["topic"]: e for e in ENTRIES}
+    answers = [str(m.get("content") or "") for m in history
+               if isinstance(m, dict) and m.get("role") == "assistant"]
+    topic_answers = [[by_topic[t] for t in _answer_topics(a) if t in by_topic] for a in answers]
+    topic_answers = [t for t in topic_answers if t]
+    current = topic_answers[-1] if topic_answers else []
+    previous = next((t for t in reversed(topic_answers[:-1])
+                     if {e["topic"] for e in t} != {e["topic"] for e in current}), [])
+    return current, previous, "\n".join(answers)
+
+
+def key_terms(entry):
+    """คำหลักของหัวข้อ ใช้หาตัวอย่าง/หัวข้อที่เกี่ยวข้อง: วลีอังกฤษในชื่อ (GROUP BY, Primary Key)
+    และชื่อไทยของหัวข้อย่อย (คีย์หลัก) ถ้าไม่มีวลีอังกฤษ ใช้ชื่อไทยของหัวข้อ"""
+    title = entry["topic"].split(" · ")[-1]
+    title = re.sub(r"^(ภาคผนวก [กข] )?(\d+\.)+\d*\s*", "", title)
+    english = [p.strip() for p in re.findall(r"[A-Za-z][A-Za-z0-9_ \-]*[A-Za-z0-9_]", title)]
+    english = [p for p in english if p.lower() not in _GENERIC_TERMS and len(p) >= 3]
+    # วลีไทยของชื่อ (ไม่เอาวงเล็บและคำอังกฤษ แต่เก็บตัวเลข เช่น "นอมอลฟอร์มระดับที่ 3")
+    thai = re.sub(r"\(.*\)|[A-Za-z_:/\-]+", " ", title)
+    thai = re.sub(r"\s+", " ", thai).strip()
+    thai = [thai] if len(thai) >= 4 else []
+    if " · " in entry["topic"] or not english:
+        return english + thai
+    return english
+
+
+def _blocks(description):
+    """แบ่งเนื้อหาเป็นก้อน: บล็อกโค้ด ```...``` ทั้งก้อน หรือบรรทัดข้อความ"""
+    lines, out, i = description.split("\n"), [], 0
+    while i < len(lines):
+        if lines[i].startswith("```"):
+            j = i + 1
+            while j < len(lines) and not lines[j].startswith("```"):
+                j += 1
+            out.append(("code", "\n".join(lines[i:j + 1])))
+            i = j + 1
+        else:
+            out.append(("text", lines[i]))
+            i += 1
+    return out
+
+
+def _example_snippets(entry, terms):
+    """ตัวอย่างในหัวข้อนี้ที่เกี่ยวกับคำหลัก (ข้อความจากตำราตรงตัว):
+    คำสั่ง SQL ที่มีคำหลัก + บรรทัดนำ ("ตัวอย่างที่ …") + ตารางผลลัพธ์ที่ตามมา, หรือบรรทัด "ตัวอย่าง/เช่น" ที่มีคำหลัก"""
+    blocks = _blocks(entry["description"])
+    has = lambda t: any(term.lower() in t.lower() for term in terms)
+    out, used = [], set()
+    for k, (kind, text) in enumerate(blocks):
+        if k in used:
+            continue
+        if kind == "code" and has(text):
+            lead = [j for j in range(max(0, k - 2), k) if blocks[j][0] == "text" and blocks[j][1].strip()]
+            start = next((j for j in lead if blocks[j][1].startswith("ตัวอย่างที่")), lead[-1] if lead else k)
+            end = k + 1
+            while end < len(blocks) and end - k <= 15 and blocks[end][0] == "text" and (
+                    " | " in blocks[end][1] or blocks[end][1].startswith("ตารางที่")):
+                end += 1
+            used.update(range(start, end))
+            out.append("\n".join(b[1] for b in blocks[start:end]))
+        elif kind == "text" and has(text) and re.search(r"ตัวอย่าง|เช่น", text) and not text.startswith("ภาพที่"):
+            used.add(k)
+            out.append(text)
+    return out
+
+
+def _topic_name(current):
+    return " / ".join(dict.fromkeys(e["topic"].split(" · ")[0] if len(current) > 1 else e["topic"] for e in current))
+
+
+def _source_line(e):
+    return "แหล่งข้อมูล: " + (e.get("references") or e["topic"]) + " · ไฟล์ " + e["source"]
+
+
+def more_examples(current, shown_text):
+    """ตัวอย่างเรื่องที่คุยอยู่ จากหัวข้ออื่นในตำรา ครั้งละ 3 ตัวอย่าง ข้ามที่เคยแสดงแล้ว"""
+    terms = [t for e in current for t in key_terms(e)]
+    name = _topic_name(current)
+    if not terms:
+        return f"เรื่อง **{name}** ในตำรามีตัวอย่างเท่าที่แสดงไปแล้วด้านบนครับ\n\n" + related_topics(current, shown_text, lead=False)
+    shown_topics = {e["topic"] for e in current}
+    seen = re.sub(r"\s+", "", shown_text)
+    found = []
+    for order, e in enumerate(ENTRIES):
+        if e["topic"] in shown_topics:
+            continue
+        for snippet in _example_snippets(e, terms):
+            if re.sub(r"\s+", "", snippet) not in seen:
+                # คำสั่ง SQL จริงก่อน, บทนำ/บทสรุป/แบบฝึกหัดไว้ท้าย, นอกนั้นตามลำดับในเล่ม
+                rank = (0 if "```" in snippet else 1, 1 if _is_meta(e["topic"]) else 0, order)
+                found.append((rank, e, snippet))
+    found.sort(key=lambda f: f[0])
+    found = [(e, snippet) for _, e, snippet in found]
+    if not found:
+        return (f"ตัวอย่างเรื่อง **{name}** ในตำรามีเท่าที่แสดงไปแล้วครับ\n\n"
+                + related_topics(current, shown_text, lead=False))
+    blocks = [f"ตัวอย่างเพิ่มเติมเรื่อง **{name}** จากหัวข้ออื่นในตำรา"]
+    for e, snippet in found[:EXAMPLES_PER_ANSWER]:
+        blocks.append("### จาก " + e["topic"] + "\n\n" + with_figures(snippet) + "\n\n" + _source_line(e))
+    rest = len(found) - EXAMPLES_PER_ANSWER
+    if rest > 0:
+        blocks.append(f'ยังมีอีก {rest} ตัวอย่าง พิมพ์ "ขอตัวอย่างเพิ่ม" เพื่อดูต่อ')
+    return "\n\n---\n\n".join(blocks)
+
+
+def related_topics(current, shown_text, lead=True):
+    """หัวข้อในตำราที่เกี่ยวกับเรื่องที่คุยอยู่ แสดงเป็นปุ่มให้แตะถามต่อ (ไม่เดาเนื้อหาเอง)"""
+    shown = set(_answer_topics(shown_text)) | {e["topic"] for e in current}
+    terms = [t.lower() for e in current for t in key_terms(e)]
+    chapters = {_chapter_of(e["topic"]) for e in current}
+    picks = []
+
+    def add(e):
+        if e["topic"] not in shown and all(p is not e for p in picks):
+            picks.append(e)
+
+    for e in current:   # 1) ส่วนอื่นของหัวข้อเดียวกันที่ยังไม่ได้แสดง
+        base = e["topic"].split(" · ")[0]
+        for x in ENTRIES:
+            if x["topic"].split(" · ")[0] == base:
+                add(x)
+    for x in ENTRIES:   # 2) หัวข้ออื่นที่ชื่อมีคำหลัก
+        if terms and any(t in x["topic"].lower() for t in terms) and not _is_meta(x["topic"]):
+            add(x)
+    ranked = []         # 3) หัวข้อในบทเดียวกันที่เนื้อหาพูดถึงคำหลักบ่อย
+    for x in ENTRIES:
+        if _chapter_of(x["topic"]) in chapters and not _is_meta(x["topic"]):
+            hits = sum(x["description"].lower().count(t) for t in terms)
+            if hits:
+                ranked.append((hits, x))
+    for _, x in sorted(ranked, key=lambda p: -p[0]):
+        add(x)
+    for x in ENTRIES:   # 4) บทสรุปของบท
+        if _chapter_of(x["topic"]) in chapters and x["topic"].startswith("บทสรุป"):
+            add(x)
+    name = _topic_name(current)
+    if not picks:
+        return f"ในตำราไม่มีหัวข้ออื่นที่เกี่ยวกับ **{name}** เพิ่มเติมครับ"
+    head = f"หัวข้อในตำราที่เกี่ยวกับ **{name}** (แตะเพื่อดูเนื้อหา)" if lead else "หัวข้อที่เกี่ยวข้องในตำรา (แตะเพื่อดูเนื้อหา)"
+    return head + "\n\n" + "\n".join(f"[[ถาม:{x['topic']}]]" for x in picks[:6])
+
+
+def render_topics(entries):
+    blocks = []
+    for e in (part for entry in entries for part in section_parts(entry)):
+        # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
+        blocks.append("\n\n".join(["## " + e["topic"], with_figures(e["description"]), _source_line(e)]))
+    return "\n\n---\n\n".join(blocks)
+
+
 def answer_from_dataset(history):
     """No generated prose: render only stored fields, with traceable provenance."""
     global ENTRIES
@@ -407,15 +587,41 @@ def answer_from_dataset(history):
     canned = small_talk(query)
     if canned:
         return canned
+
+    current, previous, shown_text = conversation_context(history)
+    if current:
+        # ถามต่อจากเรื่องที่คุยอยู่: ตัดคำถามต่อทิ้ง ดูว่ายังเหลือชื่อหัวข้อใหม่ไหม
+        residual = _FOLLOW_WORDS.sub(" ", query).strip()
+        mentioned = search(residual, limit=3) if residual else []
+        current_topics = {e["topic"] for e in current}
+        if _COMPARE_RE.search(query):
+            pair = []
+            if mentioned:
+                # "แล้วมันต่างจาก INNER JOIN ยังไง" -> เรื่องที่คุยอยู่ + เรื่องที่ยกมาเทียบ
+                # ("INNER JOIN กับ LEFT JOIN ต่างกันยังไง" ระบุครบทั้งสองฝั่ง = คำถามใหม่ ไม่เอาเรื่องเดิมมาปน)
+                implicit = _BACKREF_RE.search(query) or (re.search(r"ต่างจาก|เทียบกับ", query) and len(mentioned) == 1)
+                if implicit:
+                    pair = current + [e for e in mentioned if e["topic"] not in current_topics]
+            elif previous:    # "มันต่างกันยังไง" -> สองเรื่องล่าสุดที่คุยกัน
+                pair = previous + current
+            else:             # คุยมาเรื่องเดียว ยังไม่รู้ว่าจะเทียบกับอะไร
+                return (f"ต้องการเทียบ **{_topic_name(current)}** กับเรื่องอะไรครับ "
+                        'พิมพ์ชื่อเรื่องที่ต้องการเทียบ เช่น "ต่างจาก INNER JOIN ยังไง"')
+            if len({e["topic"] for e in pair}) > 1:
+                return "ตำราอธิบายแต่ละเรื่องไว้ดังนี้\n\n---\n\n" + render_topics(pair)
+        last_answer = next((str(m.get("content") or "") for m in reversed(history)
+                            if isinstance(m, dict) and m.get("role") == "assistant"), "")
+        asking_examples = _EXAMPLE_RE.search(query) or (   # "มีอีกไหม" ต่อจากคำตอบตัวอย่าง
+            last_answer.startswith("ตัวอย่างเพิ่มเติมเรื่อง") and _AGAIN_RE.search(query.strip())
+            and not _RELATED_RE.search(query))
+        if asking_examples and (not mentioned or {e["topic"] for e in mentioned} <= current_topics):
+            return more_examples(current, shown_text)
+        if _MORE_RE.search(query) and not mentioned:
+            return related_topics(current, shown_text)
+
     entries = search(query, limit=3)
-    if not entries and len(questions) > 1 and query.startswith(("แล้ว", "ขอตัวอย่าง", "อธิบายต่อ")):
+    if not entries and len(questions) > 1 and query.startswith(("แล้ว", "อธิบายต่อ")):
         entries = search(questions[-2] + " " + query, limit=3)
     if not entries:
         return NO_DATA
-    blocks = []
-    for e in (part for entry in entries for part in section_parts(entry)):
-        parts = ["## " + e["topic"], with_figures(e["description"])]
-        # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
-        parts.append("แหล่งข้อมูล: " + (e.get("references") or e["topic"]) + " · ไฟล์ " + e["source"])
-        blocks.append("\n\n".join(parts))
-    return "\n\n---\n\n".join(blocks)
+    return render_topics(entries)

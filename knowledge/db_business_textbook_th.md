@@ -3540,9 +3540,9 @@ DATATYPE | หมายถึง การระบุชนิดข้อม�
 ตัวอย่างการสร้างตาราง Test
 ```sql
 CREATE TABLE Test (
-id | NUMBER PRIMARY KEY NOT NULL ,
-name | TEXT (35) NOT NULL ,
-address | TEXT (35)
+id NUMBER PRIMARY KEY NOT NULL ,
+name TEXT (35) NOT NULL ,
+address TEXT (35)
 );
 ```
 หมายเหตุ ตัวพิมพ์ใหญ่ในภาษาอังกฤษแสดงถึงไวยากรณ์ของคำสั่ง SQL
@@ -3554,10 +3554,10 @@ address | TEXT (35)
 ตัวอย่าง การสร้างตารางพนักงาน Employee
 ```sql
 CREATE TABLE employee (
-emp_id | NUMBER | PRIMARY KEY NOT NULL ,
-emp_name | TEXT (35) | NOT NULL,
-emp_phone TEXT (15) | NOT NULL,
-emp_address TEXT(100) | NOT NULL
+emp_id NUMBER PRIMARY KEY NOT NULL ,
+emp_name TEXT (35) NOT NULL,
+emp_phone TEXT (15) NOT NULL,
+emp_address TEXT(100) NOT NULL
 );
 ```
 หมายเหตุ จากคำสั่ง คอลัมน์ที่ชื่อ emp_id เป็นคีย์หลักของตาราง และทุกคอลัมน์มีการระบุข้อจำกัด NOT NULL หมายถึงไม่ให้มีค่าว่างในคอลัมน์
@@ -3566,10 +3566,10 @@ emp_address TEXT(100) | NOT NULL
 ตัวอย่าง การสร้างตารางนักเรียน Student
 ```sql
 CREATE TABLE student (
-std_id | NUMBER | UNIQUE | NOT NULL ,
-std_name | TEXT (35) | NOT NULL,
-std_phone | TEXT (15) | NOT NULL,
-std_address TEXT(100) | NOT NULL
+std_id NUMBER UNIQUE NOT NULL ,
+std_name TEXT (35) NOT NULL,
+std_phone TEXT (15) NOT NULL,
+std_address TEXT(100) NOT NULL
 );
 ```
 หมายเหตุ ตัวพิมพ์ใหญ่ในภาษาอังกฤษแสดงถึงไวยากรณ์ของคำสั่ง SQL
@@ -3585,8 +3585,8 @@ in
 จากความสัมพันธ์หนึ่งต่อกลุ่ม จึงสร้างตาราง Department ก่อนดังนี้
 ```sql
 CREATE TABLE department (
-dep_id | NUMBER | PRIMARY KEY NOT NULL,
-dep_name TEXT(100) | NOT NULL
+dep_id NUMBER PRIMARY KEY NOT NULL,
+dep_name TEXT(100) NOT NULL
 );
 ```
 2) การสร้างตารางนักเรียน Student
@@ -3594,19 +3594,19 @@ dep_name TEXT(100) | NOT NULL
 วิธีที่ 1 การสร้างตารางนักเรียน
 ```sql
 CREATE TABLE student (
-std_id | NUMBER | PRIMARY KEY NOT NULL,
-std_name | TEXT(255) | NOT NULL,
-std_birthday | DATETIME | NOT NULL,
-dep_id | NUMBER | REFERENCES department (dep_id)
+std_id NUMBER PRIMARY KEY NOT NULL,
+std_name TEXT(255) NOT NULL,
+std_birthday DATETIME NOT NULL,
+dep_id NUMBER REFERENCES department (dep_id)
 );
 ```
 สังเกตที่คอลัมน์ dep_id มีการระบุค่าอ้างอิง REFERENCES ที่มาจากคอลัมน์ dep_id ของตาราง DEPARTMENT ซึ่งเป็นการเขียนแสดงความสัมพันธ์ของทั้งสองตารางวิธีที่ 2 การสร้างตารางนักเรียน สามารถเขียนได้อีกรูปแบบดังนี้
 ```sql
 CREATE TABLE student (
-std_id | NUMBER | PRIMARY KEY NOT NULL,
-std_name | TEXT(255) | NOT NULL,
-std_birthday | DATETIME | NOT NULL,
-dep_id | NUMBER | NOT NULL,
+std_id NUMBER PRIMARY KEY NOT NULL,
+std_name TEXT(255) NOT NULL,
+std_birthday DATETIME NOT NULL,
+dep_id NUMBER NOT NULL,
 FOREIGN KEY (dep_id) REFERENCES department (dep_id)
 );
 ```
@@ -3614,11 +3614,11 @@ FOREIGN KEY (dep_id) REFERENCES department (dep_id)
 6. การกำหนดค่าเริ่มต้น Default หรือค่าเริ่มต้นข้อมูลในตาราง
 ```sql
 CREATE TABLE persons (
-id | NUMBER | NOT NULL,
-lastname VARCHAR(255) | NOT NULL,
-firstname VARCHAR(255) | NOT NULL,
-age | NUMBER | NOT NULL,
-city | VARCHAR(255) | DEFAULT 'sandnes' );
+id NUMBER NOT NULL,
+lastname VARCHAR(255) NOT NULL,
+firstname VARCHAR(255) NOT NULL,
+age NUMBER NOT NULL,
+city VARCHAR(255) DEFAULT 'sandnes' );
 ```
 หมายเหตุ คำสั่ง Default ใช้ได้กับโปรแกรม SQL Server แต่ใน Microsoft Access จะต้องไปกำหนดค่า DEFAULT ที่คุณสมบัติ Properties ของคอลัมน์
 7. การกำหนดเรียงเลขอัตโนมัติ สำหรับในโปรแกรม Microsoft Access การเพิ่มคำสั่ง AUTOINCREMENT ต่อท้ายชื่อฟิวด์ ดังโครงสร้างตารางต่อไปนี้ CREATE TABLE persons (
@@ -3722,10 +3722,10 @@ VALUES (value1, value2, value3, ... n);
 ก่อนจะเพิ่มข้อมูลได้นั้นจะทำการสร้างตาราง department ก่อนดังนี้
 ```sql
 CREATE TABLE department (
-dep_id | AUTOINCREMENT PRIMARY KEY,
-dep_name | TEXT(10),
-dep_address | TEXT(50),
-dep_tel | TEXT(10) );
+dep_id AUTOINCREMENT PRIMARY KEY,
+dep_name TEXT(10),
+dep_address TEXT(50),
+dep_tel TEXT(10) );
 ```
 จากตาราง department สามารถทำการเพิ่มข้อมูลลงตารางได้ดังนี้
 กรณีที่ 1 การเพิ่มข้อมูลโดยระบุคอลัมน์
@@ -4049,10 +4049,10 @@ ptypeid | รหัสประเภท | NUMBER | FOREIGN KEY product_type
 1) คำสั่ง SQL สร้างตาราง customers
 ```sql
 CREATE TABLE customers (
-customerid | AUTOINCREMENT PRIMARY KEY NOT NULL,
-customername | VARCHAR (255) NOT NULL,
-occupation | VARCHAR (255) NOT NULL,
-address | VARCHAR (255) NOT NULL );
+customerid AUTOINCREMENT PRIMARY KEY NOT NULL,
+customername VARCHAR (255) NOT NULL,
+occupation VARCHAR (255) NOT NULL,
+address VARCHAR (255) NOT NULL );
 ```
 คำสั่ง SQL เพิ่มข้อมูลในตาราง customers
 ```sql
@@ -4071,8 +4071,8 @@ VALUES (5 ,"อธิวัฒน์ พุทธโคตร์ ","รับร
 2) คำสั่ง SQL สร้างตาราง product_type
 ```sql
 CREATE TABLE product_type (
-ptypeid | NUMBER UNIQUE PRIMARY KEY NOT NULL,
-ptypename | VARCHAR (255) NOT NULL );
+ptypeid NUMBER UNIQUE PRIMARY KEY NOT NULL,
+ptypename VARCHAR (255) NOT NULL );
 ```
 คำสั่ง SQL เพิ่มข้อมูลในตาราง product_type
 ```sql
@@ -4086,12 +4086,12 @@ VALUES (10003,"อาหาร");
 3) คำสั่ง SQL สร้างตาราง products
 ```sql
 CREATE TABLE products (
-productid | VARCHAR (255) PRIMARY KEY NOT NULL,
-productname | VARCHAR (255) NOT NULL,
-unitprice | NUMBER | NOT NULL,
-costprice | NUMBER | NOT NULL,
-qty | NUMBER | NOT NULL,
-ptypeid | NUMBER | REFERENCES product_type (ptypeid) );
+productid VARCHAR (255) PRIMARY KEY NOT NULL,
+productname VARCHAR (255) NOT NULL,
+unitprice NUMBER NOT NULL,
+costprice NUMBER NOT NULL,
+qty NUMBER NOT NULL,
+ptypeid NUMBER REFERENCES product_type (ptypeid) );
 ```
 คำสั่ง SQL เพิ่มข้อมูลในตาราง products
 ```sql
@@ -4979,53 +4979,53 @@ sumprice | ราคารวม | NUMBER
 1) สร้างตาราง product_type
 ```sql
 CREATE TABLE product_type (
-ptypeid | NUMBER UNIQUE PRIMARY KEY NOT NULL,
-ptypename | VARCHAR (255) NOT NULL );
+ptypeid NUMBER UNIQUE PRIMARY KEY NOT NULL,
+ptypename VARCHAR (255) NOT NULL );
 ```
 2) สร้างตาราง products
 ```sql
 CREATE TABLE products (
-productid | VARCHAR (255) PRIMARY KEY NOT NULL,
-productname | VARCHAR (255) NOT NULL,
-unitprice | NUMBER | NOT NULL,
-costprice | NUMBER | NOT NULL,
-qty | NUMBER | NOT NULL,
-ptypeid | NUMBER | REFERENCES product_type (ptypeid) );
+productid VARCHAR (255) PRIMARY KEY NOT NULL,
+productname VARCHAR (255) NOT NULL,
+unitprice NUMBER NOT NULL,
+costprice NUMBER NOT NULL,
+qty NUMBER NOT NULL,
+ptypeid NUMBER REFERENCES product_type (ptypeid) );
 ```
 3) สร้างตาราง customers
 ```sql
 CREATE TABLE customers (
-customerid | NUMBER PRIMARY KEY NOT NULL,
+customerid NUMBER PRIMARY KEY NOT NULL,
 customername VARCHAR (255) NOT NULL,
-occupation | VARCHAR (255) NOT NULL,
-address | VARCHAR (255) NOT NULL );
+occupation VARCHAR (255) NOT NULL,
+address VARCHAR (255) NOT NULL );
 ```
 4) สร้างตาราง employees
 ```sql
 CREATE TABLE employees (
-employeeid | NUMBER PRIMARY KEY NOT NULL,
-empname | VARCHAR (255) NOT NULL,
-emptel | VARCHAR (255) NOT NULL,
-address | VARCHAR (255) NOT NULL );
+employeeid NUMBER PRIMARY KEY NOT NULL,
+empname VARCHAR (255) NOT NULL,
+emptel VARCHAR (255) NOT NULL,
+address VARCHAR (255) NOT NULL );
 ```
 5) สร้างตาราง OrderHead
 ```sql
 CREATE TABLE OrderHead (
-OrdersHID | NUMBER PRIMARY KEY NOT NULL,
-OrderDate | DATETIME NOT NULL,
-Total | NUMBER NOT NULL ,
-customerid | NUMBER REFERENCES customers (customerid) ,
-employeeid | NUMBER REFERENCES employees (employeeid) );
+OrdersHID NUMBER PRIMARY KEY NOT NULL,
+OrderDate DATETIME NOT NULL,
+Total NUMBER NOT NULL ,
+customerid NUMBER REFERENCES customers (customerid) ,
+employeeid NUMBER REFERENCES employees (employeeid) );
 ```
 6) สร้างตาราง OrderDetail
 ```sql
 CREATE TABLE OrderDetail (
-OrderID | NUMBER PRIMARY KEY NOT NULL,
-OrdersHID | NUMBER ,
-productid | VARCHAR (255),
-qty | NUMBER ,
-price | NUMBER ,
-sumprice | NUMBER );
+OrderID NUMBER PRIMARY KEY NOT NULL,
+OrdersHID NUMBER ,
+productid VARCHAR (255),
+qty NUMBER ,
+price NUMBER ,
+sumprice NUMBER );
 ```
 หลังจากสร้างตารางแล้ว ต่อไปจะเป็นคำสั่ง SQL การเพิ่มข้อมูลลงในตาราง ดังนี้
 1) คำสั่ง SQL เพิ่มข้อมูลในตาราง product_type
