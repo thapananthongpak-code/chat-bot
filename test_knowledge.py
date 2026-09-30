@@ -32,6 +32,23 @@ class DatasetTests(unittest.TestCase):
                 self.assertEqual(kb.search(query), [])
                 self.assertEqual(kb.answer_from_dataset([{'role': 'user', 'content': query}]), kb.NO_DATA)
 
+    def test_small_talk(self):
+        ask = lambda q: kb.answer_from_dataset([{'role': 'user', 'content': q}])
+        # ถามว่าบอทตอบอะไรได้ ต้องได้รายชื่อบทจากตำรา ไม่ใช่ "ไม่มีข้อมูล"
+        for q in ['คุณตอบอะไรได้บ้าง', 'บอททำอะไรได้บ้าง', 'ถามอะไรได้บ้างครับ', 'help', 'สวัสดีครับ คุณตอบอะไรได้บ้าง']:
+            with self.subTest(q=q):
+                self.assertIn('บทที่ 7 การนอมอลไลเซชัน', ask(q))
+        for q in ['สวัสดีครับ', 'หวัดดี', 'hi']:
+            with self.subTest(q=q):
+                self.assertTrue(ask(q).startswith('สวัสดีครับ'))
+        for q in ['ขอบคุณครับ', 'ขอบคุณมากๆครับ', 'thanks']:
+            with self.subTest(q=q):
+                self.assertTrue(ask(q).startswith('ยินดีครับ'))
+        # คำถามเนื้อหาที่หน้าตาคล้ายกัน ต้องไปค้นในตำราตามปกติ
+        self.assertIn('8.1 ความหมายของภาษา SQL', ask('SQL ทำอะไรได้บ้าง'))
+        self.assertIn('9.11', ask('สวัสดี GROUP BY'))
+        self.assertEqual(ask('history'), kb.NO_DATA)
+
     def test_grounded_fields(self):
         for entry in kb.ENTRIES:
             answer = kb.answer_from_dataset([{'role': 'user', 'content': entry['topic']}])
@@ -48,6 +65,12 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(len(kb.ENTRIES), manifest['topic_count'])
         self.assertTrue(all(e['source'] == 'db_business_textbook_th.md' for e in kb.ENTRIES))
         self.assertEqual([e['topic'] for e in kb.ENTRIES], manifest['topics'])
+        # ทุกหัวข้อบอกบทและเลขหน้า และคำตอบต้องแสดงให้ผู้ใช้เห็น
+        for e in kb.ENTRIES:
+            with self.subTest(topic=e['topic']):
+                self.assertRegex(e['references'], r'(บทที่ \d+|ภาคผนวก [กข]) .+ · หน้า \d+(–\d+)? \(PDF หน้า \d+(–\d+)?\)$')
+        answer = kb.answer_from_dataset([{'role': 'user', 'content': 'คีย์หลักคืออะไร'}])
+        self.assertIn('บทที่ 4 แบบจำลองฐานข้อมูลเชิงสัมพันธ์ · หน้า 69–70 (PDF หน้า 96–97)', answer)
 
 
 if __name__ == '__main__':

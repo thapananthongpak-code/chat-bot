@@ -21,10 +21,10 @@ class DatasetOnlyTests(unittest.TestCase):
             answer = kb.answer_from_dataset([{'role':'user','content':entry['topic']}])
             # Remove all approved stored fields and fixed formatting. Nothing else may remain.
             for value in sorted([entry['topic'], entry['description'], entry['syntax'], entry['example'],
-                                 entry['source']], key=len, reverse=True):
+                                 entry['source'], entry['references']], key=len, reverse=True):
                 if value:
                     answer = answer.replace(value, '')
-            for token in ['รูปแบบคำสั่ง', 'ตัวอย่างจากชุดข้อมูล', 'แหล่งข้อมูล:', '```sql', '```', '#', '·']:
+            for token in ['รูปแบบคำสั่ง', 'ตัวอย่างจากชุดข้อมูล', 'แหล่งข้อมูล:', 'ไฟล์', '```sql', '```', '#', '·']:
                 answer = answer.replace(token, '')
             self.assertEqual(answer.strip(), '', entry['topic'])
 

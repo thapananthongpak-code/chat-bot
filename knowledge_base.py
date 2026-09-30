@@ -317,7 +317,8 @@ def search(query, limit=6, min_score=1.0):
         by_num = [e for e in ENTRIES if e["topic"].startswith(num.group(1) + " ")]
         if by_num:
             return by_num[:1]
-    if re.search(r"(?:what is sql\b|(?<![\w-])sql คืออะไร|ภาษา sql คือ|ความหมายของภาษา sql)", text):
+    if re.search(r"(?:what is sql\b|(?<![\w-])sql\s*(?:คืออะไร|ทำอะไรได้|ใช้ทำอะไร|มีกี่ประเภท|มีกี่แบบ|แบ่งเป็น)"
+                 r"|ภาษา sql คือ|ความหมายของภาษา sql)", text):
         return [e for e in ENTRIES if e["topic"].startswith("8.1 ")][:1]
 
     if re.search(r"ภาคผนวก\s*[ค-ฮ]", text):
@@ -370,7 +371,55 @@ def search(query, limit=6, min_score=1.0):
     return [e for score, e in ranked if score >= max(min_score, ranked[0][0] * .7)][:limit]
 
 
-NO_DATA = "ไม่มีข้อมูลเรื่องนี้ในตำราครับ"
+BOOK_NAME = "การจัดการระบบฐานข้อมูลเพื่องานธุรกิจ"
+HELP_HINT = 'พิมพ์ "ตอบอะไรได้บ้าง" เพื่อดูหัวข้อทั้งหมด'
+NO_DATA = ("ไม่มีข้อมูลเรื่องนี้ในตำราครับ\n\n"
+           f"ผมตอบได้เฉพาะเรื่องฐานข้อมูลและ SQL จากตำรา **{BOOK_NAME}** — {HELP_HINT}")
+
+EXAMPLES = ["คีย์หลัก (Primary Key) คืออะไร", "ER Diagram คืออะไร", "นอมอลฟอร์มระดับที่ 3 (3NF)",
+            "INNER JOIN กับ LEFT JOIN ต่างกันยังไง", "GROUP BY กับ HAVING ใช้ยังไง"]
+
+# คำถามถึงตัวบอท ไม่ใช่คำถามเนื้อหา: ตัดคำสุภาพ/สรรพนามทิ้งแล้วต้องเหลือตรงกับวลีเหล่านี้ทั้งหมด
+# (เทียบทั้งประโยค เพื่อไม่ให้ "SQL ทำอะไรได้บ้าง" กลายเป็นคำถามถึงบอท)
+_POLITE = re.compile(r"[\s?!.ๆ]+|ครับ|คับ|ค่ะ|คะ|นะ|จ้า|จ้ะ|หน่อย|มากๆ|มาก")
+# สรรพนามเรียกบอท ตัดทิ้งเฉพาะตอนเช็กคำถามถึงบอท (ห้ามตัดก่อนเช็ก "ขอบคุณ" ไม่งั้นเหลือ "ขอบ")
+_PRONOUNS = re.compile(r"คุณ|บอท|ครูเอสคิว|นาย|เธอ|แก|น้อง")
+_GREETINGS = ("สวัสดี", "หวัดดี", "ดีจ้า", "hello", "hi", "hey")
+_THANKS = ("ขอบคุณ", "ขอบใจ", "thanks", "thankyou", "thx")
+_ABOUT_BOT = {
+    "ตอบอะไรได้บ้าง", "ตอบอะไรได้", "ตอบเรื่องอะไรได้บ้าง", "ตอบเรื่องอะไรบ้าง", "ทำอะไรได้บ้าง", "ทำอะไรได้",
+    "ช่วยอะไรได้บ้าง", "ช่วยอะไรได้", "ถามอะไรได้บ้าง", "ถามอะไรได้", "ถามเรื่องอะไรได้บ้าง", "รู้อะไรบ้าง",
+    "รู้เรื่องอะไรบ้าง", "มีหัวข้ออะไรบ้าง", "มีเรื่องอะไรบ้าง", "คือใคร", "เป็นใคร", "ใช้งานยังไง", "ใช้งานอย่างไร",
+    "วิธีใช้", "help", "/help", "เมนู", "menu",
+}
+
+
+def _about_bot():
+    chapters = [e["topic"].removesuffix(" (บทนำ)") for e in ENTRIES if e["topic"].endswith("(บทนำ)")]
+    return "\n".join(
+        [f"ผมครูเอสคิว ตอบคำถามเรื่องฐานข้อมูลและ SQL จากตำรา **{BOOK_NAME}** เท่านั้น "
+         "ไม่แต่งคำตอบเอง ถ้าเรื่องไหนตำราไม่มี ผมจะบอกว่าไม่มีข้อมูลครับ", "", "ตำราแบ่งเป็นหัวข้อเหล่านี้"]
+        + ["- " + c for c in chapters]
+        + ["", "ลองถามเช่น"] + ["- " + q for q in EXAMPLES]
+        + ["", "ถามด้วยเลขหัวข้อก็ได้ เช่น 7.5 หรือ แบบฝึกหัดบทที่ 7"])
+
+
+def small_talk(query):
+    """คำทักทาย คำขอบคุณ และคำถามว่าบอทตอบอะไรได้ ตอบด้วยข้อความคงที่ ไม่ค้นในตำรา"""
+    text = _POLITE.sub("", query.lower())
+    for g in _GREETINGS:
+        if text.startswith(g):
+            rest = text[len(g):]
+            if not rest:
+                return ("สวัสดีครับ ผมครูเอสคิว ถามเรื่องฐานข้อมูลและ SQL ได้เลย เช่น "
+                        + ", ".join(EXAMPLES[:3]) + "\n\n" + HELP_HINT)
+            text = rest   # "สวัสดี ตอบอะไรได้บ้าง" ให้ดูส่วนที่เหลือต่อ
+            break
+    if text in _THANKS:
+        return "ยินดีครับ มีคำถามเรื่องฐานข้อมูลหรือ SQL ถามต่อได้เลยครับ"
+    if _PRONOUNS.sub("", text) in _ABOUT_BOT:
+        return _about_bot()
+    return None
 
 
 def answer_from_dataset(history):
@@ -382,6 +431,9 @@ def answer_from_dataset(history):
         return DATASET_ERROR
     questions = [str(m.get("content") or "") for m in history if isinstance(m, dict) and m.get("role") == "user"]
     query = questions[-1] if questions else ""
+    canned = small_talk(query)
+    if canned:
+        return canned
     entries = search(query, limit=2)
     if not entries and len(questions) > 1 and query.startswith(("แล้ว", "ขอตัวอย่าง", "อธิบายต่อ")):
         entries = search(questions[-2] + " " + query, limit=2)
@@ -393,6 +445,7 @@ def answer_from_dataset(history):
         for key, label in (("syntax", "รูปแบบคำสั่ง"), ("example", "ตัวอย่างจากชุดข้อมูล")):
             if e[key]:
                 parts.append("### " + label + "\n```sql\n" + e[key] + "\n```")
-        parts.append("แหล่งข้อมูล: " + e["source"] + " · " + e["topic"])
+        # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
+        parts.append("แหล่งข้อมูล: " + (e.get("references") or e["topic"]) + " · ไฟล์ " + e["source"])
         blocks.append("\n\n".join(parts))
     return "\n\n---\n\n".join(blocks)
