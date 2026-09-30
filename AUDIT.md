@@ -50,7 +50,7 @@
 
 ## การทดสอบ
 
-`./venv/bin/python -m unittest test_knowledge test_handbook_app test_dataset_only test_telegram -v` ผ่าน 23 tests
+`./venv/bin/python -m unittest test_knowledge test_handbook_app test_dataset_only test_telegram -v` ผ่าน 24 tests
 ตรวจทุกหัวข้อว่าคำตอบมีเฉพาะ stored fields, ไม่ทำตาม prompt injection ที่ทดสอบ,
 หยุดตอบเมื่อไฟล์หายหรือ checksum ไม่ตรง, คำถามนอกตำรา 17 ข้อ (รวม CTE, Transaction, SQL Injection, MySQL, NoSQL, ภาคผนวก ค) ได้ "ไม่มีข้อมูล",
 คำถามจริง 15 ข้อเลือกหัวข้อถูก และคำตอบยาวบน Telegram ไม่เกิน 4000 ตัวอักษร

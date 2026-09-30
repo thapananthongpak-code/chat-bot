@@ -4,7 +4,7 @@ from linebot.v3 import WebhookHandler
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 from linebot.v3.exceptions import InvalidSignatureError
-import os, json, re, hmac
+import os, json, re, hmac, hashlib
 import urllib.request
 from datetime import datetime, timezone
 
@@ -114,9 +114,21 @@ def chat_with_ai(history, system=None):
     return kb.answer_from_dataset(history)
 
 
+def page_version():
+    """เวอร์ชันหน้าเว็บ = hash ของเนื้อหา templates/index.html (ไม่ใช้เวลาไฟล์ เพราะตอน deploy อาจถูกตั้งใหม่)
+    แท็บที่เปิดค้างไว้ก่อนอัปเดตจะรู้ตัวว่าเก่า (เช่นเก่ากว่าฟีเจอร์รูป) แล้วขึ้นให้รีเฟรช"""
+    try:
+        with open(os.path.join(app.root_path, "templates", "index.html"), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:12]
+    except OSError:
+        return ""
+
+
 @app.route("/")
 def index():
-    return render_template("index.html")
+    response = app.make_response(render_template("index.html", page_version=page_version()))
+    response.headers["Cache-Control"] = "no-cache"   # รีเฟรชแล้วได้หน้าล่าสุดเสมอ
+    return response
 
 @app.route("/chat/stream", methods=["POST"])
 def chat_stream():
@@ -145,7 +157,8 @@ def chat_stream():
 
     return Response(stream_with_context(generate()),
                     mimetype="text/plain; charset=utf-8",
-                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache",
+                             "X-Page-Version": page_version()})
 
 
 @app.route("/chats/<chat_id>", methods=["DELETE"])

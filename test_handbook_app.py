@@ -22,6 +22,17 @@ class HandbookRoutes(unittest.TestCase):
             self.assertIn('HAVING', text)
 
 
+    def test_page_version_matches_between_page_and_answers(self):
+        # แท็บเก่าเทียบเวอร์ชันนี้กับ header ของคำตอบ ถ้าไม่ตรงจะขึ้นให้รีเฟรช
+        with application.app.test_client() as client, patch.object(application, 'save_web_chat'):
+            version = application.page_version()
+            self.assertRegex(version, r'^[0-9a-f]{12}$')
+            page = client.get('/')
+            self.assertIn(f'const PAGE_VERSION = "{version}";', page.get_data(as_text=True))
+            self.assertEqual(page.headers['Cache-Control'], 'no-cache')
+            answer = client.post('/chat/stream', json={'message': 'GROUP BY'})
+            self.assertEqual(answer.headers['X-Page-Version'], version)
+
     def test_figure_is_served(self):
         with application.app.test_client() as client:
             r = client.get('/static/figures/fig_5_1.webp')
