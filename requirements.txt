@@ -1,4 +1,2 @@
 flask
-python-dotenv
-line-bot-sdk
 gunicorn

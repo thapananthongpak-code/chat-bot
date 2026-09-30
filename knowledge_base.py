@@ -21,7 +21,7 @@ _TH_NOISE = [
     "ช่วยอธิบาย", "อธิบาย", "ช่วยบอก", "ช่วย", "หน่อย", "ขอตัวอย่าง",
     "ตัวอย่าง", "อยากรู้", "อยากทราบ", "เรื่อง", "ครับ", "ค่ะ", "คะ", "นะ",
     "แล้ว", "และ", "หรือ", "ที่", "ให้", "ได้", "การ", "ของ", "แบบ", "ทำ", "ใช้",
-    "ความแตกต่าง", "แตกต่าง", "ต่างกัน", "เปรียบเทียบ", "ไหม", "กับ",
+    "ความแตกต่าง", "แตกต่าง", "ต่างกัน", "เปรียบเทียบ", "ไหม", "กับ", "มีกี่", "กี่",
 ]
 
 
@@ -257,6 +257,12 @@ def search(query, limit=6, min_score=1.0):
         if " " in english and english in topic:
             score += 15
         score += 6 * len(numbers & _numbers(topic))
+        # คะแนนเท่ากัน ให้หัวข้อที่ชื่อตรงกับคำถามเกือบทั้งชื่อชนะ (เช่น "5.3 เอ็นทิตี้" ชนะ
+        # "4.6 กฎความคงสภาพ… · 1. กฎความคงสภาพของเอ็นทิตี้" เมื่อถาม "เอ็นทิตี้มีกี่ประเภท")
+        # (หัวข้อย่อยวัดเฉพาะชื่อส่วนของตัวเอง ไม่นับชื่อหัวข้อหลักที่นำหน้า)
+        own = _thai_ngrams(topic.split(" · ")[-1])
+        if own:
+            score += .5 * len(grams & own) / len(own)   # น้ำหนักน้อย ใช้ตัดสินเฉพาะตอนคะแนนใกล้กัน
         if _is_meta(e["topic"]) and not meta_query:
             score *= .3
         ranked.append((score, e))
@@ -266,7 +272,47 @@ def search(query, limit=6, min_score=1.0):
             # ถามถึงบทเฉย ๆ เช่น "บทที่ 7" ให้บทนำของบทนั้น
             return [e for e in pool if e["topic"].endswith("(บทนำ)")][:1] or pool[:1]
         return []
-    return [e for score, e in ranked if score >= max(min_score, ranked[0][0] * .7)][:limit]
+
+    def coverage(topic):
+        """ส่วนของคำถามที่ชื่อหัวข้อนี้ตอบ: คำอังกฤษ ตัวเลข และ n-gram ไทยที่ตรงกัน"""
+        topic = topic.lower()
+        return ({"w:" + w for w in words & set(_WORD_RE.findall(topic))}
+                | {"n:" + n for n in numbers & _numbers(topic)}
+                | {"g:" + g for g in grams & _thai_ngrams(topic)})
+
+    def adds(cov, base):
+        """cov ตอบส่วนของคำถามที่ base ยังไม่ได้ตอบจริงไหม (ไม่ใช่แค่ตัวอักษรซ้ำบังเอิญ 1-2 ชิ้น)"""
+        new = cov - base
+        new_grams = sum(1 for x in new if x.startswith("g:"))
+        return any(not x.startswith("g:") for x in new) or new_grams >= max(3, .25 * len(grams))
+
+    by_topic = {e["topic"]: e for e in ENTRIES}
+    cut = max(min_score, ranked[0][0] * .7)
+    chosen, covered = [], set()
+    for score, e in ranked:
+        if score < cut or len(chosen) >= limit:
+            break
+        cov = coverage(e["topic"])
+        parent = by_topic.get(e["topic"].split(" · ")[0])
+        if parent is not e and parent is not None:
+            if any(c is parent for c in chosen):
+                continue   # ตอบทั้งหัวข้อหลักไปแล้ว ส่วนย่อยรวมอยู่ในนั้น
+            # ส่วนย่อยตรงกับคำถามแค่เพราะชื่อหัวข้อหลัก (เช่น "ประเภทของคีย์") ให้ตอบทั้งหัวข้อ ไม่ใช่ส่วนเดียว
+            parent_cov = coverage(parent["topic"])
+            if not adds(cov, parent_cov):
+                e, cov = parent, parent_cov
+        if any(c is e for c in chosen):
+            continue
+        # หัวข้อถัดไปต้องตอบส่วนของคำถามที่หัวข้อก่อนหน้ายังไม่ได้ตอบ (เช่น LEFT JOIN ใน "INNER JOIN กับ LEFT JOIN")
+        # ไม่งั้นเป็นแค่หัวข้อที่มีคำซ้ำ ไม่ใช่เรื่องที่ถาม
+        if chosen and not adds(cov, covered):
+            continue
+        # บทนำ/บทสรุป/แบบฝึกหัด พูดกว้าง ๆ ทั้งบท ไม่ดึงมาเป็นหัวข้อเสริม เว้นแต่ผู้ใช้ถามถึงเอง
+        if chosen and _is_meta(e["topic"]) and not meta_query:
+            continue
+        chosen.append(e)
+        covered |= cov
+    return chosen
 
 
 BOOK_NAME = "การจัดการระบบฐานข้อมูลเพื่องานธุรกิจ"
@@ -341,6 +387,14 @@ def with_figures(description):
     return "\n".join(out)
 
 
+def section_parts(entry):
+    """หัวข้อยาวถูกแบ่งเป็นส่วนย่อย ("4.5 ประเภทของคีย์ · 3. คีย์หลัก") ถ้าตอบหัวข้อหลัก ต้องได้ครบทุกส่วน
+    ไม่ใช่แค่ย่อหน้านำ (ซึ่งมักจบด้วย "ดังรายละเอียดต่อไปนี้")"""
+    if " · " in entry["topic"]:
+        return [entry]
+    return [entry] + [e for e in ENTRIES if e["topic"].startswith(entry["topic"] + " · ")]
+
+
 def answer_from_dataset(history):
     """No generated prose: render only stored fields, with traceable provenance."""
     global ENTRIES
@@ -353,13 +407,13 @@ def answer_from_dataset(history):
     canned = small_talk(query)
     if canned:
         return canned
-    entries = search(query, limit=2)
+    entries = search(query, limit=3)
     if not entries and len(questions) > 1 and query.startswith(("แล้ว", "ขอตัวอย่าง", "อธิบายต่อ")):
-        entries = search(questions[-2] + " " + query, limit=2)
+        entries = search(questions[-2] + " " + query, limit=3)
     if not entries:
         return NO_DATA
     blocks = []
-    for e in entries:
+    for e in (part for entry in entries for part in section_parts(entry)):
         parts = ["## " + e["topic"], with_figures(e["description"])]
         # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
         parts.append("แหล่งข้อมูล: " + (e.get("references") or e["topic"]) + " · ไฟล์ " + e["source"])

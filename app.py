@@ -1,23 +1,10 @@
-from flask import Flask, render_template, request, jsonify, abort, Response, stream_with_context
-from dotenv import load_dotenv
-from linebot.v3 import WebhookHandler
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
-from linebot.v3.exceptions import InvalidSignatureError
-import os, json, re, hmac, hashlib
-import urllib.request
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
+import os, json, re, hashlib
 from datetime import datetime, timezone
 
 import knowledge_base as kb
 
-load_dotenv()
 app = Flask(__name__)
-
-# Dataset-only mode: no generative client, prompt, or environment override.
-configuration = Configuration(access_token=os.getenv("LINE_CHANNEL_ACCESS_TOKEN"))
-handler = WebhookHandler(os.getenv("LINE_CHANNEL_SECRET") or "disabled-local-web-only")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 
 # บน Vercel ระบบไฟล์เป็น read-only ยกเว้น /tmp การเขียนที่อื่นจะทำให้แอปพังตั้งแต่ import
 ON_SERVERLESS = bool(os.getenv("VERCEL"))
@@ -27,7 +14,7 @@ DATA_DIR = os.getenv("DATA_DIR") or (
 try:
     os.makedirs(DATA_DIR, exist_ok=True)
 except OSError as exc:
-    print(f"[!] สร้างโฟลเดอร์เก็บประวัติไม่ได้ ({exc}) — บอทจะทำงานต่อได้แต่ไม่จำบทสนทนา LINE")
+    print(f"[!] สร้างโฟลเดอร์เก็บประวัติไม่ได้ ({exc}) — บอทจะทำงานต่อได้แต่ไม่เก็บสำเนาแชตฝั่งเซิร์ฟเวอร์")
 
 MAX_HISTORY = 30  # เก็บสูงสุด 30 ข้อความล่าสุด
 
@@ -63,25 +50,6 @@ def save_web_chat(chat_id, name, history):
         return False
 
 
-def load_line_history(user_id, prefix="line"):
-    path = os.path.join(DATA_DIR, f"{prefix}_{user_id}.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        # ไม่มีไฟล์ อ่านไม่ได้ หรือไฟล์เสีย — เริ่มบทสนทนาใหม่ ดีกว่าปล่อยให้ 500
-        return []
-    # ไฟล์อ่านได้แต่รูปแบบผิด (เช่นเป็น dict) ก็กรองทิ้ง ไม่งั้นทุกข้อความของแชตนี้จะ 500 ตลอดไป
-    return clean_history(data)
-
-def save_line_history(user_id, history, prefix="line"):
-    path = os.path.join(DATA_DIR, f"{prefix}_{user_id}.json")
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(history[-MAX_HISTORY:], f, ensure_ascii=False, indent=2)
-    except OSError as exc:
-        print(f"[!] บันทึกประวัติ LINE ไม่ได้: {exc}")
-
 def clean_history(raw):
     """กรองประวัติที่รับมาจากเบราว์เซอร์ ให้เหลือเฉพาะรูปแบบที่ API ยอมรับ"""
     if not isinstance(raw, list):
@@ -96,10 +64,6 @@ def clean_history(raw):
 def stream_reply(history):
     """Extract stored content without a generative model."""
     yield kb.answer_from_dataset(history)
-
-
-def chat_with_ai(history):
-    return kb.answer_from_dataset(history)
 
 
 def page_version():
@@ -159,102 +123,6 @@ def chat_delete(chat_id):
     except OSError:
         pass  # ไม่มีไฟล์อยู่แล้วก็ถือว่าลบสำเร็จ
     return jsonify({"ok": True})
-
-
-TRIMMED_NOTE = "… (เนื้อหายาวเกินหนึ่งข้อความ อ่านต่อได้ในเว็บแชต)"
-
-
-def to_line_text(text, limit=4900):
-    """LINE ไม่เรนเดอร์ Markdown จึงถอดบล็อกโค้ด/ตัวหนาออกก่อนส่ง
-    ข้อความเดียวของ LINE ยาวได้ไม่เกิน 5000 ตัวอักษร (Telegram 4096)"""
-    text = re.sub(r"```[a-zA-Z]*\n?", "", text)
-    text = re.sub(r"^\s*\|[\s|:-]+\|\s*$", "", text, flags=re.M)  # เส้นคั่นตาราง |---|---|
-    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)               # หัวข้อ ## ###
-    text = re.sub(r"^\s*[-*]{3,}\s*$", "", text, flags=re.M)         # เส้นคั่น ---
-    text = re.sub(r"^\\#", "#", text, flags=re.M)                     # \# ในไฟล์ความรู้ = # ตัวจริง
-    text = re.sub(r"^!\[[^\]]*\]\([^)]*\)\n?", "", text, flags=re.M)     # รูปประกอบ แสดงเฉพาะหน้าเว็บ
-    text = text.replace("`", "").replace("**", "")
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    if len(text) <= limit:
-        return text
-    # ตัดเนื้อหาตรงกลาง แต่เก็บบรรทัดแหล่งข้อมูลท้ายคำตอบไว้ ให้รู้ว่ามาจากหัวข้อไหน
-    body, sep, source = text.rpartition("\nแหล่งข้อมูล:")
-    tail = (sep + source) if sep and len(source) < 600 else ""
-    room = limit - len(tail) - len(TRIMMED_NOTE) - 2
-    return (body if sep else text)[:room].rstrip() + "\n" + TRIMMED_NOTE + "\n" + tail.lstrip("\n")
-
-
-@app.route("/callback", methods=["POST"])
-def callback():
-    signature = request.headers.get("X-Line-Signature", "")
-    body = request.get_data(as_text=True)
-    if not body:
-        return "OK", 200
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return "OK", 200
-
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    user_id = event.source.user_id
-    user_text = event.message.text
-    history = load_line_history(user_id)
-    history.append({"role": "user", "content": user_text})
-    reply = chat_with_ai(history)
-    history.append({"role": "assistant", "content": reply})
-    save_line_history(user_id, history)
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)
-        line_bot_api.reply_message(ReplyMessageRequest(
-            reply_token=event.reply_token,
-            messages=[TextMessage(text=to_line_text(reply))]
-        ))
-
-TELEGRAM_WELCOME = ("สวัสดีครับ ผมครูเอสคิว ถามเรื่องฐานข้อมูลและ SQL ได้เลย "
-                    "เช่น คีย์หลัก, ER Diagram, 3NF, GROUP BY, LEFT JOIN "
-                    "คำตอบมาจากตำราการจัดการระบบฐานข้อมูลเพื่องานธุรกิจ 426 หน้าครับ")
-
-
-def telegram_send(chat_id, text):
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        data=json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        urllib.request.urlopen(req, timeout=10).close()
-    except OSError as exc:
-        print(f"[!] ส่งข้อความ Telegram ไม่ได้: {exc}")
-
-
-@app.route("/telegram", methods=["POST"])
-def telegram_webhook():
-    # ต้องตั้งทั้ง token และ secret — ไม่งั้นใครก็ยิงเข้ามาสั่งบอทส่งข้อความได้
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_WEBHOOK_SECRET:
-        abort(404)
-    given = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not hmac.compare_digest(given, TELEGRAM_WEBHOOK_SECRET):
-        abort(403)
-    update = request.get_json(silent=True)
-    message = update.get("message") if isinstance(update, dict) else None
-    chat = message.get("chat") if isinstance(message, dict) else None
-    chat_id = chat.get("id") if isinstance(chat, dict) else None
-    text = message.get("text") if isinstance(message, dict) else None
-    text = text.strip() if isinstance(text, str) else ""
-    if not isinstance(chat_id, int) or not text:
-        return "OK", 200  # สติกเกอร์ รูป หรือ update ชนิดอื่น — ข้ามไป
-    if text.startswith("/start"):
-        telegram_send(chat_id, TELEGRAM_WELCOME)
-        return "OK", 200
-    history = load_line_history(chat_id, prefix="tg")
-    history.append({"role": "user", "content": text[:4000]})
-    reply = chat_with_ai(history)
-    history.append({"role": "assistant", "content": reply})
-    save_line_history(chat_id, history, prefix="tg")
-    telegram_send(chat_id, to_line_text(reply, limit=4000))  # Telegram รับได้ไม่เกิน 4096 ตัวอักษร
-    return "OK", 200
 
 
 if __name__ == "__main__":

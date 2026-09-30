@@ -32,6 +32,38 @@ class DatasetTests(unittest.TestCase):
                 self.assertEqual(kb.search(query), [])
                 self.assertEqual(kb.answer_from_dataset([{'role': 'user', 'content': query}]), kb.NO_DATA)
 
+    def test_no_unrelated_second_topic(self):
+        # หัวข้อที่แค่มีคำซ้ำกับคำถาม ไม่ถูกดึงมาปน
+        for query, only in [('DBMS คืออะไร', '2.3 '), ('ข้อดีของฐานข้อมูล', '2.5 '), ('พจนานุกรมข้อมูล', '6.8 '),
+                            ('SELECT ใช้ยังไง', '9.2 '), ('นอร์มัลไลเซชันคืออะไร', '7.1 '), ('normalization', '7.1 '),
+                            ('ERD', '5.1 '), ('ความสัมพันธ์แบบกลุ่มต่อกลุ่ม', '5.6 ')]:
+            with self.subTest(query=query):
+                found = kb.search(query, 3)
+                self.assertEqual(len(found), 1, [e['topic'] for e in found])
+                self.assertTrue(found[0]['topic'].startswith(only))
+
+    def test_question_about_two_things_gets_both(self):
+        for query, starts in [('INNER JOIN กับ LEFT JOIN ต่างกันยังไง', ['10.5 ', '10.6 ']),
+                              ('คีย์หลักกับคีย์นอกต่างกันยังไง', ['4.5 ประเภทของคีย์ · 3.', '4.5 ประเภทของคีย์ · 4.']),
+                              ('UPDATE กับ DELETE ต่างกันยังไง', ['8.7 ', '8.8 ']),
+                              ('1NF 2NF 3NF', ['7.5 ', '7.6 ', '7.7 '])]:
+            with self.subTest(query=query):
+                self.assertEqual([e['topic'][:len(s)] for e, s in zip(kb.search(query, 3), starts)], starts)
+
+    def test_whole_section_is_not_cut(self):
+        # หัวข้อที่ถูกแบ่งส่วน ถามหัวข้อหลักต้องได้ครบทุกส่วน ไม่ใช่แค่ย่อหน้านำ ("…ดังรายละเอียดต่อไปนี้")
+        ask = lambda q: kb.answer_from_dataset([{'role': 'user', 'content': q}])
+        for query in ['ประเภทของคีย์', 'คีย์มีกี่ประเภท', '4.5']:
+            with self.subTest(query=query):
+                answer = ask(query)
+                for part in [e for e in kb.ENTRIES if e['topic'].startswith('4.5 ประเภทของคีย์')]:
+                    self.assertIn(kb.with_figures(part['description']), answer)   # เนื้อหาครบ (พร้อมรูปในตำรา)
+        # ถามเจาะจงส่วนเดียว ได้ส่วนนั้นส่วนเดียว
+        answer = ask('คีย์หลักคืออะไร')
+        self.assertIn('## 4.5 ประเภทของคีย์ · 3. คีย์หลัก (Primary Key)', answer)
+        self.assertNotIn('คีย์สำรอง (Alternate Key)', answer)
+        self.assertIn('5.3 เอ็นทิตี้ · 2. เอ็นทิตี้แบบอ่อนแอ', ask('เอ็นทิตี้มีกี่ประเภท'))
+
     def test_small_talk(self):
         ask = lambda q: kb.answer_from_dataset([{'role': 'user', 'content': q}])
         # ถามว่าบอทตอบอะไรได้ ต้องได้รายชื่อบทจากตำรา ไม่ใช่ "ไม่มีข้อมูล"

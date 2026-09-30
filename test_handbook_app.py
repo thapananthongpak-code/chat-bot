@@ -1,9 +1,8 @@
-"""Offline route checks: never loads .env or contacts a model."""
+"""Offline route checks for the web app (the only channel): never contacts a model."""
 import unittest
 from unittest.mock import patch
 
-with patch('dotenv.load_dotenv', return_value=False):
-    import app as application
+import app as application
 
 
 class HandbookRoutes(unittest.TestCase):
@@ -32,6 +31,12 @@ class HandbookRoutes(unittest.TestCase):
             self.assertEqual(page.headers['Cache-Control'], 'no-cache')
             answer = client.post('/chat/stream', json={'message': 'GROUP BY'})
             self.assertEqual(answer.headers['X-Page-Version'], version)
+
+    def test_line_and_telegram_are_removed(self):
+        # รองรับเฉพาะหน้าเว็บ: webhook ของ LINE และ Telegram ถูกเอาออกแล้ว
+        with application.app.test_client() as client:
+            for path in ['/callback', '/telegram']:
+                self.assertEqual(client.post(path, json={}).status_code, 404)
 
     def test_figure_is_served(self):
         with application.app.test_client() as client:

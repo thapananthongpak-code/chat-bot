@@ -132,6 +132,9 @@
     .body h3:first-child, .body h4:first-child { margin-top: 0; }
     .body ul, .body ol { margin: 0 0 11px; padding-left: 20px; }
     .body li { margin-bottom: 4px; }
+    .body ul.marked { list-style: none; padding-left: 0; }
+    .body ul.marked li { display: grid; grid-template-columns: auto 1fr; column-gap: .5em; }
+    .body ul.marked .mk { min-width: 1.4em; font-variant-numeric: tabular-nums; }
     .body hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
     .body strong { font-weight: 600; }
     .table-wrap { overflow-x: auto; margin: 13px 0; border: 1px solid var(--line); border-radius: 10px; }
@@ -500,16 +503,16 @@
         }
 
         if (isItem(i)) {
-          const ordered = numbered.test(line);
+          // แสดงเครื่องหมายหน้ารายการตามตำราตรงตัว ("1)" "1." "-" "*") ไม่ให้เบราว์เซอร์นับเลข/ใส่จุดเอง
+          // (ตำรามีรายการที่เริ่มนับ 1 ใหม่ติดกัน เช่น 1) 2) 3) 1) 2) และใช้ทั้ง "1)" และ "1.")
           const items = [];
           while (i < lines.length && isItem(i)) {
-            // คงเลขข้อตามตำราทุกข้อ (ตำรามีรายการที่เริ่มนับ 1 ใหม่ติดกัน เช่น 1) 2) 3) 1) 2))
-            const n = numbered.test(lines[i]) ? parseInt(lines[i].trim(), 10) : null;
-            items.push({ n, t: lines[i].replace(bullet, "").replace(numbered, "") });
+            const m = lines[i].match(numbered) || lines[i].match(bullet);
+            items.push({ mark: m[0].trim(), t: lines[i].slice(m[0].length) });
             i++;
           }
-          const tag = ordered ? "ol" : "ul";
-          html += `<${tag}>` + items.map(it => (ordered && it.n !== null ? `<li value="${it.n}">` : "<li>") + inline(it.t) + "</li>").join("") + `</${tag}>`;
+          html += '<ul class="marked">' + items.map(it =>
+            '<li><span class="mk">' + escapeHtml(it.mark) + "</span><span>" + inline(it.t) + "</span></li>").join("") + "</ul>";
           continue;
         }
 

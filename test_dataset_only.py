@@ -27,11 +27,14 @@ class DatasetOnlyTests(unittest.TestCase):
                 self.assertIn(src, figures)
             answer = re.sub(r'^!\[ภาพที่ [\d.]+\]\(/static/figures/[^)]+\)\n', '', answer, flags=re.M)
             # Remove all approved stored fields and fixed formatting. Nothing else may remain.
-            for value in sorted([entry['topic'], entry['description'], entry['source'], entry['references']],
-                                key=len, reverse=True):
+            # (ถามหัวข้อหลักที่ถูกแบ่งส่วน จะได้ทุกส่วนของหัวข้อนั้น จึงลบฟิลด์ของทุกส่วนที่อยู่ในคำตอบ)
+            shown = [e for e in kb.ENTRIES if '## ' + e['topic'] + '\n' in answer]
+            self.assertIn(entry, shown)
+            values = [v for e in shown for v in (e['topic'], e['description'], e['source'], e['references'])]
+            for value in sorted(values, key=len, reverse=True):
                 if value:
                     answer = answer.replace(value, '')
-            for token in ['แหล่งข้อมูล:', 'ไฟล์', '#', '·']:
+            for token in ['แหล่งข้อมูล:', 'ไฟล์', '---', '#', '·']:
                 answer = answer.replace(token, '')
             self.assertEqual(answer.strip(), '', entry['topic'])
 
@@ -47,6 +50,14 @@ class DatasetOnlyTests(unittest.TestCase):
                 self.assertRegex(text, r'(?m)^ภาพที่\s*' + re.escape(f['figure']) + r'(?!\d)')
         answer = kb.answer_from_dataset([{'role': 'user', 'content': 'ER Diagram คืออะไร'}])
         self.assertIn('![ภาพที่ 5.1](/static/figures/fig_5_1.webp)', answer)
+
+    def test_every_topic_answer_is_complete(self):
+        # ถามด้วยชื่อหัวข้อ ต้องได้เนื้อหาในไฟล์ครบทุกตัวอักษร (พร้อมรูปในตำรา) และที่มา ไม่ย่อ ไม่ตัด
+        for entry in kb.ENTRIES:
+            with self.subTest(topic=entry['topic']):
+                answer = kb.answer_from_dataset([{'role': 'user', 'content': entry['topic']}])
+                self.assertIn(kb.with_figures(entry['description']), answer)
+                self.assertIn(entry['references'], answer)
 
     def test_no_example_is_invented(self):
         topic = '1.1 ความหมายของข้อมูลและสารสนเทศ'
