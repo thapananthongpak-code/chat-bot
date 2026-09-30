@@ -22,6 +22,12 @@ class HandbookRoutes(unittest.TestCase):
             self.assertIn('HAVING', text)
 
 
+    def test_figure_is_served(self):
+        with application.app.test_client() as client:
+            r = client.get('/static/figures/fig_5_1.webp')
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.mimetype, 'image/webp')
+
     def test_non_string_ids_do_not_crash(self):
         with application.app.test_client() as client, patch.object(application, 'save_web_chat'):
             for payload in [{'message': 'GROUP BY', 'chat_id': 12345678}, {'message': 'GROUP BY', 'name': 5}]:

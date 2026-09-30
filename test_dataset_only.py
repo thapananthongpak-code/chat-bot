@@ -1,5 +1,7 @@
 """Grounding invariants, not an estimate of semantic retrieval accuracy."""
 import builtins
+import hashlib
+import re
 import json
 import unittest
 from pathlib import Path
@@ -19,6 +21,11 @@ class DatasetOnlyTests(unittest.TestCase):
     def test_all_answers_are_stored_fields_only(self):
         for entry in kb.ENTRIES:
             answer = kb.answer_from_dataset([{'role':'user','content':entry['topic']}])
+            # รูปประกอบต้องเป็นรูปจากตำราที่อยู่ใน manifest เท่านั้น แล้วตัดออกก่อนเทียบข้อความ
+            figures = {f['file'] for f in kb.DOCUMENT_META['figures']}
+            for src in re.findall(r'^!\[ภาพที่ [\d.]+\]\(/static/figures/([^)]+)\)$', answer, re.M):
+                self.assertIn(src, figures)
+            answer = re.sub(r'^!\[ภาพที่ [\d.]+\]\(/static/figures/[^)]+\)\n', '', answer, flags=re.M)
             # Remove all approved stored fields and fixed formatting. Nothing else may remain.
             for value in sorted([entry['topic'], entry['description'], entry['syntax'], entry['example'],
                                  entry['source'], entry['references']], key=len, reverse=True):
@@ -27,6 +34,19 @@ class DatasetOnlyTests(unittest.TestCase):
             for token in ['รูปแบบคำสั่ง', 'ตัวอย่างจากชุดข้อมูล', 'แหล่งข้อมูล:', 'ไฟล์', '```sql', '```', '#', '·']:
                 answer = answer.replace(token, '')
             self.assertEqual(answer.strip(), '', entry['topic'])
+
+    def test_figures_match_manifest(self):
+        # รูปทุกรูปตรงกับ checksum ใน manifest และทุกรูปมีคำบรรยาย "ภาพที่ X.Y" ในไฟล์ความรู้ให้ผูกได้
+        figures = kb.DOCUMENT_META['figures']
+        self.assertEqual(len(figures), 126)
+        text = '\n'.join(e['description'] for e in kb.ENTRIES)
+        for f in figures:
+            with self.subTest(figure=f['figure']):
+                data = (Path(kb.FIGURE_DIR) / f['file']).read_bytes()
+                self.assertEqual(hashlib.sha256(data).hexdigest(), f['sha256'])
+                self.assertRegex(text, r'(?m)^ภาพที่\s*' + re.escape(f['figure']) + r'(?!\d)')
+        answer = kb.answer_from_dataset([{'role': 'user', 'content': 'ER Diagram คืออะไร'}])
+        self.assertIn('![ภาพที่ 5.1](/static/figures/fig_5_1.webp)', answer)
 
     def test_no_example_is_invented(self):
         topic = '1.1 ความหมายของข้อมูลและสารสนเทศ'

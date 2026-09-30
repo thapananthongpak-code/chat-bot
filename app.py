@@ -171,6 +171,7 @@ def to_line_text(text, limit=4900):
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)               # หัวข้อ ## ###
     text = re.sub(r"^\s*[-*]{3,}\s*$", "", text, flags=re.M)         # เส้นคั่น ---
     text = re.sub(r"^\\#", "#", text, flags=re.M)                     # \# ในไฟล์ความรู้ = # ตัวจริง
+    text = re.sub(r"^!\[[^\]]*\]\([^)]*\)\n?", "", text, flags=re.M)     # รูปประกอบ แสดงเฉพาะหน้าเว็บ
     text = text.replace("`", "").replace("**", "")
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     if len(text) <= limit:

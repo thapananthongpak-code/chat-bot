@@ -422,6 +422,27 @@ def small_talk(query):
     return None
 
 
+FIGURE_DIR = os.path.join(os.path.dirname(__file__), "static", "figures")
+FIGURE_URL = "/static/figures/"
+_CAPTION_RE = re.compile(r"^ภาพที่\s*(\d+\.\d+)(?!\d)")
+
+
+def with_figures(description):
+    """ใส่รูปจากตำรา (ตัดจากหน้า PDF ไว้ล่วงหน้า) ไว้เหนือบรรทัดคำบรรยาย "ภาพที่ X.Y" แบบเดียวกับในเล่ม
+    ใช้เฉพาะรูปที่อยู่ใน manifest และมีไฟล์อยู่จริง"""
+    figures = {f["figure"]: f for f in DOCUMENT_META.get("figures", [])}
+    if not figures:
+        return description
+    out = []
+    for line in description.split("\n"):
+        m = _CAPTION_RE.match(line)
+        f = figures.get(m.group(1)) if m else None
+        if f and os.path.isfile(os.path.join(FIGURE_DIR, os.path.basename(f["file"]))):
+            out.append(f"![ภาพที่ {f['figure']}]({FIGURE_URL}{os.path.basename(f['file'])})")
+        out.append(line)
+    return "\n".join(out)
+
+
 def answer_from_dataset(history):
     """No generated prose: render only stored fields, with traceable provenance."""
     global ENTRIES
@@ -441,7 +462,7 @@ def answer_from_dataset(history):
         return NO_DATA
     blocks = []
     for e in entries:
-        parts = ["## " + e["topic"], e["description"]]
+        parts = ["## " + e["topic"], with_figures(e["description"])]
         for key, label in (("syntax", "รูปแบบคำสั่ง"), ("example", "ตัวอย่างจากชุดข้อมูล")):
             if e[key]:
                 parts.append("### " + label + "\n```sql\n" + e[key] + "\n```")

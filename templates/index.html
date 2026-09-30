@@ -285,6 +285,39 @@
     }
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+    /* ---------- รูปประกอบจากตำรา ---------- */
+    .fig { margin: 12px 0 6px; }
+    .fig button {
+      display: block; padding: 8px; cursor: zoom-in; max-width: 100%;
+      background: #fff; border: 1px solid var(--line); border-radius: 10px;
+      transition: border-color .16s, transform .16s var(--ease);
+    }
+    .fig button:hover { border-color: var(--muted); }
+    .fig button:active { transform: scale(.99); }
+    .fig img { display: block; max-width: 100%; max-height: 420px; height: auto; border-radius: 4px; }
+    .fig-hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+    .lightbox {
+      position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px; padding: 24px;
+      background: rgba(0,0,0,.82); opacity: 0; visibility: hidden; cursor: zoom-out;
+      transition: opacity .2s, visibility .2s;
+    }
+    .lightbox.show { opacity: 1; visibility: visible; }
+    .lightbox img {
+      /* ขยายให้เต็มพื้นที่ (รูปเล็กก็ขยายขึ้น) แต่ไม่เกินความสูงจอ */
+      width: min(1200px, 100%); height: auto; object-fit: contain;
+      max-height: calc(100dvh - 110px); background: #fff;
+      border-radius: 8px; padding: 10px; transform: scale(.97); transition: transform .2s var(--ease);
+    }
+    .lightbox.show img { transform: none; }
+    .lightbox .cap { color: #eee; font-size: 14px; text-align: center; max-width: 900px; }
+    .lightbox .close {
+      position: absolute; top: calc(12px + env(safe-area-inset-top)); right: 14px;
+      width: 40px; height: 40px; border-radius: 50%; border: none; cursor: pointer;
+      background: rgba(255,255,255,.14); color: #fff; font-size: 20px;
+    }
+
     .fs-group { display: flex; gap: 4px; }
     .fs-group .btn.icon { font-size: 12.5px; font-weight: 600; }
     .welcome-sub { color: var(--muted); font-size: 13px; }
@@ -329,6 +362,11 @@
     </div>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="รูปขนาดใหญ่" onclick="closeFigure()">
+    <button class="close" onclick="closeFigure()" aria-label="ปิด">×</button>
+    <img id="lightboxImg" alt="">
+    <div class="cap" id="lightboxCap"></div>
+  </div>
 
   <script>
     const input = document.getElementById("input");
@@ -418,6 +456,16 @@
     }
 
     const CELL_SEP = /\S \| \S/;
+    const FIGURE_LINE = /^!\[([^\]]*)\]\((\/static\/figures\/[\w.-]+\.webp)\)$/;
+
+    function openFigure(btn) {
+      const img = btn.querySelector("img");
+      document.getElementById("lightboxImg").src = img.src;
+      document.getElementById("lightboxImg").alt = img.alt;
+      document.getElementById("lightboxCap").textContent = btn.dataset.cap || img.alt;
+      document.getElementById("lightbox").classList.add("show");
+    }
+    function closeFigure() { document.getElementById("lightbox").classList.remove("show"); }
 
     function renderText(text) {
       // ไฟล์ความรู้ใส่ \ หน้า # ที่ต้นบรรทัดไว้ ไม่ให้ชนกับตัวแบ่งหัวข้อ: แสดงเป็น # ตามตำรา และไม่นับเป็นหัวข้อ
@@ -435,6 +483,18 @@
         if (!line.trim()) { i++; continue; }
 
         if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { html += "<hr>"; i++; continue; }
+
+        // รูปประกอบจากตำรา ![ภาพที่ X.Y](/static/figures/…) รับเฉพาะรูปในโฟลเดอร์ของเราเอง
+        if (line.startsWith("![")) {
+          const img = line.match(FIGURE_LINE);
+          if (img) {
+            const caption = (lines[i + 1] || "").trim();   // บรรทัดถัดไปคือคำบรรยายภาพในเล่ม
+            html += '<figure class="fig"><button type="button" onclick="openFigure(this)" data-cap="' + escapeHtml(caption) + '">' +
+                    '<img src="' + img[2] + '" alt="' + escapeHtml(img[1]) + '" loading="lazy" decoding="async"></button>' +
+                    '<div class="fig-hint">แตะที่รูปเพื่อดูขนาดใหญ่</div></figure>';
+          }
+          i++; continue;   // บรรทัดรูปที่ยังพิมพ์ไม่ครบ (ระหว่างอนิเมชัน) ข้ามไปก่อน
+        }
 
         const heading = isHeading(i) && line.match(/^(#{1,4})\s+(.*)$/);
         if (heading) {
@@ -477,7 +537,7 @@
 
         const para = [];
         while (i < lines.length && lines[i].trim() &&
-               !lines[i].trim().startsWith("|") && !isHeading(i) &&
+               !lines[i].trim().startsWith("|") && !isHeading(i) && !lines[i].startsWith("![") &&
                !(isRow(i) && isRow(i + 1)) && !isItem(i) &&
                !/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])) {
           para.push(lines[i]); i++;
@@ -695,7 +755,7 @@
       const copy = document.createElement("button");
       copy.className = "tool"; copy.textContent = "คัดลอก";
       copy.onclick = () => {
-        copyText(text).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
+        copyText(text.replace(/^!\[[^\]]*\]\([^)]*\)\n?/gm, "")).then(() => toast("คัดลอกคำตอบแล้ว"), () => toast("คัดลอกไม่สำเร็จ"));
       };
       box.appendChild(copy);
       if ("speechSynthesis" in window) {
@@ -815,6 +875,7 @@
       return text
         .replace(/```[\s\S]*?```/g, "\n(ตัวอย่างคำสั่ง SQL)\n")
         .replace(/^แหล่งข้อมูล:.*$/gm, "")
+        .replace(/^!\[[^\]]*\]\([^)]*\)$/gm, "")
         .replace(/^#+\s*/gm, "")
         .replace(/^\s*[-*]{3,}\s*$/gm, "")
         .replace(/ \| /g, ", ")
@@ -931,7 +992,8 @@
 
     document.addEventListener("keydown", e => {
       if (e.key === "Escape") {
-        if (skipTyping) skipTyping();
+        if (document.getElementById("lightbox").classList.contains("show")) closeFigure();
+        else if (skipTyping) skipTyping();
         else if (busy && controller) controller.abort();
         return;
       }

@@ -43,6 +43,7 @@ class TelegramWebhook(unittest.TestCase):
         self.assertIn(application.TRIMMED_NOTE, text)
         self.assertIn('แหล่งข้อมูล:', text)
         self.assertIn('PDF หน้า', text)   # ตัดข้อความยาวแล้วยังเห็นบทและเลขหน้า
+        self.assertNotIn('![', text)      # รูปแสดงเฉพาะหน้าเว็บ
 
     def test_malformed_updates_are_ignored(self):
         for body in [[1], {'message': 'hi'}, {'message': {'chat': 5, 'text': 'x'}},
