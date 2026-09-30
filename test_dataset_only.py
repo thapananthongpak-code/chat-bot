@@ -27,11 +27,11 @@ class DatasetOnlyTests(unittest.TestCase):
                 self.assertIn(src, figures)
             answer = re.sub(r'^!\[ภาพที่ [\d.]+\]\(/static/figures/[^)]+\)\n', '', answer, flags=re.M)
             # Remove all approved stored fields and fixed formatting. Nothing else may remain.
-            for value in sorted([entry['topic'], entry['description'], entry['syntax'], entry['example'],
-                                 entry['source'], entry['references']], key=len, reverse=True):
+            for value in sorted([entry['topic'], entry['description'], entry['source'], entry['references']],
+                                key=len, reverse=True):
                 if value:
                     answer = answer.replace(value, '')
-            for token in ['รูปแบบคำสั่ง', 'ตัวอย่างจากชุดข้อมูล', 'แหล่งข้อมูล:', 'ไฟล์', '```sql', '```', '#', '·']:
+            for token in ['แหล่งข้อมูล:', 'ไฟล์', '#', '·']:
                 answer = answer.replace(token, '')
             self.assertEqual(answer.strip(), '', entry['topic'])
 

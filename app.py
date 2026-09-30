@@ -42,18 +42,6 @@ def chat_path(chat_id):
     return os.path.join(DATA_DIR, f"web_{chat_id}.json")
 
 
-def load_web_chat(chat_id):
-    path = chat_path(chat_id)
-    if not path:
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else None
-    except (OSError, ValueError):
-        return None
-
-
 def save_web_chat(chat_id, name, history):
     path = chat_path(chat_id)
     if not path:
@@ -105,12 +93,12 @@ def clean_history(raw):
     ]
 
 
-def stream_reply(history, system=None):
+def stream_reply(history):
     """Extract stored content without a generative model."""
     yield kb.answer_from_dataset(history)
 
 
-def chat_with_ai(history, system=None):
+def chat_with_ai(history):
     return kb.answer_from_dataset(history)
 
 

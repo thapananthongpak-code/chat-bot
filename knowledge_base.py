@@ -1,6 +1,5 @@
 """โหลดตำราฐานข้อมูล (Markdown ที่แปลงจาก PDF) แล้วค้นหาหัวข้อที่เกี่ยวข้องกับคำถามผู้ใช้"""
 
-import csv
 import os
 import re
 import hashlib
@@ -11,7 +10,6 @@ MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "output/pdf/manifest.jso
 DATASET_ERROR = ""
 DOCUMENT_META = {}
 
-# คอลัมน์ในไฟล์ CSV: หัวข้อ (Topic), คำอธิบาย (Description), คำสั่ง SQL (Syntax), ตัวอย่าง (Example)
 _EMPTY = {"", "-", "–", "—"}
 
 # คำภาษาอังกฤษที่พบบ่อยจนไม่ช่วยแยกแยะหัวข้อ
@@ -96,34 +94,6 @@ def _clean(value):
     return "" if value in _EMPTY else value
 
 
-def _load_file(path):
-    entries = []
-    # utf-8-sig เพื่อตัด BOM ที่ติดมากับไฟล์ CSV จาก Excel
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            values = list(row.values())
-            topic = _clean(values[0] if values else "")
-            if not topic:
-                continue
-            entries.append({
-                "topic": topic,
-                "description": _clean(values[1] if len(values) > 1 else ""),
-                "syntax": _clean(values[2] if len(values) > 2 else ""),
-                "example": _clean(values[3] if len(values) > 3 else ""),
-                "source": os.path.basename(path),
-            })
-    return entries
-
-
-_MD_FENCE = re.compile(r"```[a-zA-Z]*\n(.*?)```", re.S)
-
-
-def _md_code(text):
-    """ดึงเนื้อในบล็อกโค้ด ```...``` ถ้าไม่มีก็ใช้ข้อความดิบ"""
-    m = _MD_FENCE.search(text)
-    return "\n\n".join(_MD_FENCE.findall(text)).strip() if m else _md_prose(text)
-
-
 def _md_prose(text):
     """ตัดเส้นคั่นแนวนอน (--- หรือ ***) ทิ้ง ไม่งั้นเส้นคั่นของหัวข้อถัดไป
     จะถูกดูดมาอยู่ท้ายคำอธิบายของหัวข้อก่อนหน้า"""
@@ -133,8 +103,7 @@ def _md_prose(text):
 
 def _load_md(path):
     """อ่านไฟล์ Markdown ตามข้อตกลง:
-    `## หัวข้อ` = 1 หัวข้อ, ข้อความถัดมา = คำอธิบาย,
-    `### รูปแบบคำสั่ง` = Syntax, `### ตัวอย่าง` = Example"""
+    `## หัวข้อ` = 1 หัวข้อ, ข้อความถัดมา = เนื้อหา, `### แหล่งอ้างอิง` = บทและเลขหน้า"""
     with open(path, encoding="utf-8") as f:
         raw = f.read()
     parts = re.split(r"^##[ \t]+(?!#)(.+?)[ \t]*$", raw, flags=re.M)
@@ -145,17 +114,9 @@ def _load_md(path):
             continue
         segs = re.split(r"^###[ \t]+(.+?)[ \t]*$", parts[i + 1], flags=re.M)
         named = {segs[j].strip().lower(): segs[j + 1] for j in range(1, len(segs) - 1, 2)}
-        syntax = example = ""
-        for key, body in named.items():
-            if "รูปแบบ" in key or "syntax" in key:
-                syntax = syntax or _md_code(body)
-            elif "ตัวอย่าง" in key or "example" in key:
-                example = example or _md_code(body)
         entries.append({
             "topic": topic,
             "description": _clean(_md_prose(segs[0])),
-            "syntax": _clean(syntax),
-            "example": _clean(example),
             "source": os.path.basename(path),
             "references": _md_prose(named.get("แหล่งอ้างอิง", "")),
         })
@@ -186,10 +147,6 @@ def load_entries():
     except (OSError, ValueError, KeyError, TypeError):
         DATASET_ERROR = "ชุดข้อมูลยังไม่พร้อมหรือไม่ตรงกับ PDF จึงหยุดตอบเพื่อป้องกันการใช้ข้อมูลผิดฉบับครับ"
         return []
-    for entry in entries:
-        entry["_haystack"] = " ".join([
-            entry["topic"], entry["description"], entry["syntax"], entry["example"]
-        ]).lower()
     return entries
 
 
@@ -215,65 +172,6 @@ def _thai_ngrams(text, sizes=(4, 3)):
             for i in range(len(chunk) - size + 1):
                 grams.add(chunk[i:i + size])
     return grams
-
-
-def _score(entry, words, grams, is_definition=False):
-    topic = entry["topic"].lower()
-    score = 0.0
-    # ถ้าผู้ใช้ถามเชิงนิยาม ให้หัวข้อทฤษฎี ("... คืออะไร?") ขึ้นก่อนหัวข้อคำสั่ง
-    for word in words:
-        if re.search(r"\b" + re.escape(word) + r"\b", topic):
-            score += 10.0
-        elif re.search(r"\b" + re.escape(word) + r"\b", entry["_haystack"]):
-            score += 2.0
-    if grams:
-        topic_hits = sum(1 for g in grams if g in topic)
-        body_hits = sum(1 for g in grams if g in entry["_haystack"])
-        # หารด้วยจำนวน n-gram ทั้งหมด เพื่อไม่ให้คำถามยาวได้เปรียบเกินไป
-        score += 8.0 * topic_hits / len(grams)
-        score += 3.0 * body_hits / len(grams)
-    return score
-
-
-def _legacy_search(query, limit=6, min_score=1.0):
-    """คืนรายการหัวข้อที่เกี่ยวข้องกับคำถามมากที่สุด"""
-    if not query or not ENTRIES:
-        return []
-    lowered = query.lower()
-    words = {w for w in _WORD_RE.findall(lowered) if len(w) > 1 and w not in _STOPWORDS}
-    words |= _alias_words(lowered)
-    grams = _thai_ngrams(lowered)
-    is_definition = any(k in lowered for k in ("คืออะไร", "หมายถึง", "what is"))
-    scored = [(_score(e, words, grams, is_definition), e) for e in ENTRIES]
-    ranked = sorted([p for p in scored if p[0] > 0], key=lambda p: p[0], reverse=True)
-
-    strong = [e for s, e in ranked if s >= min_score]
-    if strong:
-        return strong[:limit]
-    # ไม่มีหัวข้อไหนถึงเกณฑ์ แต่ยังพอมีที่เกี่ยวข้องบ้าง — ส่งอันที่ใกล้ที่สุดให้โมเดลตัดสินเอง
-    # กันคำถาม SQL จริง ๆ ที่ใช้คำไม่ตรงกับในไฟล์ โดนปฏิเสธทั้งที่ตอบได้
-    return []
-
-
-# บอกให้ชัดว่าช่องไหนไม่มีข้อมูล ไม่งั้นโมเดลจะเข้าใจว่าไม่ได้ส่งมาแล้วแต่งเติมเอง
-_MISSING = "(ไม่มีข้อมูลส่วนนี้ในคลังความรู้ ห้ามแต่งขึ้นเอง)"
-
-
-def format_entries(entries):
-    blocks = []
-    for entry in entries:
-        blocks.append("\n".join([
-            f"### {entry['topic']}",
-            f"คำอธิบาย: {entry['description'] or _MISSING}",
-            f"รูปแบบคำสั่ง: {entry['syntax'] or _MISSING}",
-            f"ตัวอย่าง: {entry['example'] or _MISSING}",
-        ]))
-    return "\n\n".join(blocks)
-
-
-def topic_index():
-    """รายชื่อหัวข้อทั้งหมดในคลังความรู้ ใช้บอกขอบเขตที่ตอบได้"""
-    return " | ".join(e["topic"] for e in ENTRIES)
 
 
 def _expand(text):
@@ -463,9 +361,6 @@ def answer_from_dataset(history):
     blocks = []
     for e in entries:
         parts = ["## " + e["topic"], with_figures(e["description"])]
-        for key, label in (("syntax", "รูปแบบคำสั่ง"), ("example", "ตัวอย่างจากชุดข้อมูล")):
-            if e[key]:
-                parts.append("### " + label + "\n```sql\n" + e[key] + "\n```")
         # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
         parts.append("แหล่งข้อมูล: " + (e.get("references") or e["topic"]) + " · ไฟล์ " + e["source"])
         blocks.append("\n\n".join(parts))

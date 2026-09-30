@@ -103,7 +103,7 @@
     /* ---------- พื้นที่สนทนา ---------- */
     .main { flex: 1; min-width: 0; height: 100dvh; display: flex; flex-direction: column; }
     .topbar {
-      flex-shrink: 0; border-bottom: 1px solid var(--line);
+      flex-shrink: 0; border-bottom: 1px solid var(--line); backdrop-filter: blur(18px);
       display: flex; align-items: center; gap: 10px; padding: 8px 12px;
       padding-top: calc(8px + env(safe-area-inset-top));
     }
@@ -115,9 +115,10 @@
     .stream::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
     .inner { max-width: 760px; margin: 0 auto; padding: 26px 22px 40px; }
 
-    .turn { margin-bottom: 26px; animation: rise .32s var(--ease) both; }
-    @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
-    .turn.user { display: flex; justify-content: flex-end; }
+    .turn { margin-bottom: 26px; animation: arrive .22s ease-out; }
+    @keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .turn.user { display: flex; justify-content: flex-end; animation: send-arrive .3s ease-out; }
+    @keyframes send-arrive { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
     .turn.user .body {
       background: var(--surface-2); border-radius: 16px 16px 4px 16px;
       padding: 10px 15px; max-width: 78%; white-space: pre-wrap;
@@ -152,8 +153,7 @@
     .str, .num { opacity: .72; }
     .cmt { opacity: .45; font-style: italic; }
 
-    .turn-tools { display: flex; gap: 2px; margin-top: 8px; opacity: 0; transition: opacity .16s; }
-    .turn.bot:hover .turn-tools, .turn-tools.show { opacity: 1; }
+    .turn-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; margin-top: 8px; }
     .tool {
       background: none; border: none; color: var(--muted); cursor: pointer;
       font-family: inherit; font-size: 12px; padding: 4px 9px; border-radius: 7px;
@@ -166,7 +166,8 @@
     }
     @keyframes caret { 50% { opacity: 0; } }
 
-    .typing { display: flex; gap: 5px; align-items: center; height: 22px; }
+    .typing { display: flex; gap: 6px; align-items: center; height: 22px; }
+    .search-label { font-size: 13px; margin-right: 10px; opacity: .7; }
     .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); display: block; animation: blink 1.2s infinite; }
     .typing i:nth-child(2) { animation-delay: .18s; }
     .typing i:nth-child(3) { animation-delay: .36s; }
@@ -188,9 +189,9 @@
       display: flex; align-items: flex-end; gap: 8px;
       background: var(--surface); border: 1px solid var(--line);
       border-radius: 16px; padding: 7px 7px 7px 15px;
-      transition: border-color .16s;
+      box-shadow: 0 12px 40px #00000018; transition: box-shadow .2s, transform .2s;
     }
-    .composer:focus-within { border-color: var(--muted); }
+    .composer:focus-within { border-color: var(--muted); box-shadow: 0 0 0 2px #8885, 0 12px 40px #00000018; }
     .composer textarea {
       flex: 1; resize: none; border: none; outline: none; background: none;
       color: var(--fg); font-family: inherit; line-height: 1.6;
@@ -229,22 +230,10 @@
       *, *::after { animation: none !important; transition: none !important; }
       .stream { scroll-behavior: auto; }
     }
-    .topbar { backdrop-filter: blur(18px); border-bottom: 1px solid var(--line); }
-    .composer { box-shadow: 0 12px 40px #00000018; transition: box-shadow .2s, transform .2s; }
-    .composer:focus-within { box-shadow: 0 0 0 2px #8885, 0 12px 40px #00000018; }
-    .turn { animation: arrive .22s ease-out; }
-    .turn-tools { opacity: 1; }
     .body { overflow-wrap: anywhere; }
     .body a { color: inherit; text-underline-offset: 4px; }
     button:focus-visible, textarea:focus-visible { outline: 2px solid #999; outline-offset: 3px; }
-    @keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
     @media (max-width: 600px) { .tool { min-height: 44px; } }
-    .turn.user { animation:send-arrive .3s ease-out; }
-    .typing { align-items:center; gap:6px; }
-    .search-label { font-size:13px; margin-right:10px; opacity:.7; }
-    @keyframes send-arrive { from { opacity:0; transform:translateY(14px) scale(.98); } to { opacity:1; transform:none; } }
-    @media(prefers-reduced-motion:reduce) { .turn.user { animation:none; } }
 
     /* ---------- ขนาดตัวอักษรที่ผู้ใช้ปรับได้ ---------- */
     .inner { --fs: 15px; }
@@ -260,7 +249,6 @@
     /* คำที่ผู้ใช้ถาม ไฮไลต์ในคำตอบ */
     mark.hit { background: none; color: inherit; box-shadow: inset 0 -.42em 0 var(--surface-2); border-radius: 2px; }
 
-    .turn-tools { align-items: center; flex-wrap: wrap; }
     .turn-tools .meta { font-size: 11.5px; color: var(--muted); padding: 4px 9px; }
     .tool.on { color: var(--fg); background: var(--surface-2); }
 
@@ -329,7 +317,6 @@
 
     .fs-group { display: flex; gap: 4px; }
     .fs-group .btn.icon { font-size: 12.5px; font-weight: 600; }
-    .welcome-sub { color: var(--muted); font-size: 13px; }
     @media (max-width: 600px) { .fs-group { display: none; } .jump { bottom: 96px; } }
   </style>
 </head>
@@ -453,18 +440,6 @@
         .replace(/https?:\/\/[^\s<>]+/g, url => '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>');
     }
 
-    function renderTable(rows) {
-      // แถวที่ 2 ของตาราง Markdown เป็นเส้นคั่น (|---|---|) ข้ามไป
-      const cells = row => row.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
-      const head = cells(rows[0]);
-      const body = rows.slice(2).map(cells);
-      return '<div class="table-wrap"><table><thead><tr>' +
-        head.map(c => "<th>" + inline(c) + "</th>").join("") +
-        "</tr></thead><tbody>" +
-        body.map(r => "<tr>" + r.map(c => "<td>" + inline(c) + "</td>").join("") + "</tr>").join("") +
-        "</tbody></table></div>";
-    }
-
     const CELL_SEP = /\S \| \S/;
     const FIGURE_LINE = /^!\[([^\]]*)\]\((\/static\/figures\/[\w.-]+\.webp)\)$/;
 
@@ -524,13 +499,6 @@
           continue;
         }
 
-        if (line.trim().startsWith("|")) {
-          const rows = [];
-          while (i < lines.length && lines[i].trim().startsWith("|")) { rows.push(lines[i].trim()); i++; }
-          html += rows.length >= 2 ? renderTable(rows) : "<p>" + inline(rows.join("\n")) + "</p>";
-          continue;
-        }
-
         if (isItem(i)) {
           const ordered = numbered.test(line);
           const items = [];
@@ -547,7 +515,7 @@
 
         const para = [];
         while (i < lines.length && lines[i].trim() &&
-               !lines[i].trim().startsWith("|") && !isHeading(i) && !lines[i].startsWith("![") &&
+               !isHeading(i) && !lines[i].startsWith("![") &&
                !(isRow(i) && isRow(i + 1)) && !isItem(i) &&
                !/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])) {
           para.push(lines[i]); i++;
@@ -574,7 +542,12 @@
     }
 
     function copyText(text) {
-      if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      // clipboard API อาจถูกปฏิเสธสิทธิ์ (หรือไม่มีเลยบน http) ให้ลองวิธีสำรองต่อ
+      if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text).catch(() => legacyCopy(text));
+      return legacyCopy(text);
+    }
+
+    function legacyCopy(text) {
       return new Promise((resolve, reject) => {
         const ta = document.createElement("textarea");
         ta.value = text; ta.setAttribute("readonly", "");
@@ -670,7 +643,7 @@
           const el = addTurn(m.content, m.role === "user" ? "user" : "bot");
           if (m.role === "user") { question = m.content; return; }
           markTerms(el.querySelector(".body"), question);
-          addTools(el, m.content, null);
+          addTools(el, m.content);
         });
       } else {
         welcome();
@@ -768,7 +741,7 @@
       sendBtn.title = on ? "หยุด" : "ส่ง";
     }
 
-    function addTools(el, text, onRetry) {
+    function addTools(el, text) {
       const box = document.createElement("div");
       box.className = "turn-tools";
       const copy = document.createElement("button");
@@ -790,12 +763,6 @@
         meta.className = "meta";
         meta.textContent = "อ่านราว " + Math.max(1, Math.round(plain.length / 700)) + " นาที";
         box.appendChild(meta);
-      }
-      if (onRetry) {
-        const again = document.createElement("button");
-        again.className = "tool"; again.textContent = "ถามใหม่";
-        again.onclick = onRetry;
-        box.appendChild(again);
       }
       el.appendChild(box);
     }
@@ -940,16 +907,15 @@
       toast("ขนาดตัวอักษร " + FONT_SIZES[fontIndex] + "px");
     }
 
-    async function ask(text, replaceLast) {
+    async function ask(text) {
       if (busy) return;
       const id = state.activeId;
       const c = current();
       let history = c && c.history ? c.history.slice() : [];
-      if (replaceLast) history = history.slice(0, -2);   // ถามใหม่: ตัดคู่ถาม-ตอบเดิมออก
       if (!history.length) turns.innerHTML = "";
 
       follow = true;
-      if (!replaceLast) addTurn(text, "user");
+      addTurn(text, "user");
 
       const el = document.createElement("div");
       el.className = "turn bot";
@@ -1003,7 +969,7 @@
         setBusy(false);
       }
 
-      addTools(el, reply, null);
+      addTools(el, reply);
       history.push({ role: "user", content: text });
       history.push({ role: "assistant", content: reply });
       touch(id, history);
@@ -1028,7 +994,7 @@
       const text = input.value.trim();
       if (!text) return;
       input.value = ""; grow();
-      ask(text, false);
+      ask(text);
     }
 
     /* ================= เริ่มทำงาน ================= */
