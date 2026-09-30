@@ -13,7 +13,8 @@ class DatasetTests(unittest.TestCase):
                                 ('weak entity', 'อ่อนแอ'), ('ER Diagram คืออะไร', '5.1'),
                                 ('DBMS คืออะไร', 'ระบบจัดการฐานข้อมูล'),
                                 ('ข้อมูลกับสารสนเทศต่างกันยังไง', 'สารสนเทศ'),
-                                ('what is sql', 'ความหมายของภาษา SQL'), ('7.5', 'นอมอลฟอร์มระดับที่ 1'),
+                                ('what is sql', 'ความหมายของภาษา SQL'), ('ภาษา SQL คืออะไร', 'ความหมายของภาษา SQL'),
+                                ('ภาษา DDL คืออะไร', 'ความหมายของภาษา SQL'), ('7.5', 'นอมอลฟอร์มระดับที่ 1'),
                                 ('แบบฝึกหัดบทที่ 7', 'แบบฝึกหัดท้ายบท บทที่ 7')]:
             with self.subTest(query=query):
                 self.assertIn(expected, kb.search(query, 1)[0]['topic'])
@@ -24,7 +25,9 @@ class DatasetTests(unittest.TestCase):
                       'วิธีทำต้มยำกุ้ง', 'ฟุตบอลคืนนี้ใครชนะ', 'python list comprehension',
                       'CTE', 'ROW_NUMBER', 'Transaction', 'stored procedure', 'SQL Injection',
                       # ชื่อระบบที่มีคำว่า sql ไม่ใช่คำถาม "SQL คืออะไร" และภาคผนวกที่ตำราไม่มี
-                      'MySQL คืออะไร', 'NoSQL คืออะไร', 'what is sqlite', 'PostgreSQL คืออะไร', 'ภาคผนวก ค']:
+                      'MySQL คืออะไร', 'NoSQL คืออะไร', 'what is sqlite', 'PostgreSQL คืออะไร', 'ภาคผนวก ค',
+                      # ภาษาโปรแกรมอื่น เคยได้หัวข้อ "8.1 ความหมายของภาษา SQL" เพราะคำว่า "ภาษา"
+                      'ภาษา C คืออะไร', 'ภาษา c', 'ภาษา Python คืออะไร', 'ภาษา Java', 'ภาษา C++', 'ภาษา PHP']:
             with self.subTest(query=query):
                 self.assertEqual(kb.search(query), [])
                 self.assertEqual(kb.answer_from_dataset([{'role': 'user', 'content': query}]), kb.NO_DATA)

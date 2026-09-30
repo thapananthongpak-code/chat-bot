@@ -301,6 +301,10 @@ def _is_meta(topic):
     return topic.startswith(("บทสรุป", "แบบฝึกหัด")) or topic.endswith("(บทนำ)")
 
 
+# คำที่ตามหลัง "ภาษา" แล้วยังหมายถึงภาษา SQL ในตำรา (เช่น ภาษา DDL = ภาษานิยามข้อมูลของ SQL)
+_SQL_LANG_WORDS = {"sql", "ddl", "dml", "dcl", "data", "structured", "query"}
+
+
 def search(query, limit=6, min_score=1.0):
     """Require topic evidence: a word in the body alone is not evidence the book explains it."""
     text = query.lower().strip()
@@ -325,6 +329,12 @@ def search(query, limit=6, min_score=1.0):
         pool = [e for e in ENTRIES if _chapter_of(e["topic"]) == wanted] or ENTRIES
         text = text.replace(chapter.group(0), " ")
     meta_query = any(k in text for k in _META_WORDS)
+
+    # ตำรามีแต่ "ภาษา SQL" ถ้าถามภาษาอื่น (ภาษา C, Python, Java) คำว่า "ภาษา" อย่างเดียว
+    # จะพาไปเจอหัวข้อ "8.1 ความหมายของภาษา SQL" ทั้งที่ตำราไม่ได้พูดถึงภาษานั้นเลย
+    lang = re.search(r"ภาษา\s*([a-z][a-z0-9+#]*|ซี|จาวา|ไพทอน|ไพธอน)", text)
+    if lang and lang.group(1) not in _SQL_LANG_WORDS:
+        return []
 
     text = _expand(text)
     words = set(_WORD_RE.findall(text)) - _STOPWORDS - {"function", "use", "explain", "does"}
