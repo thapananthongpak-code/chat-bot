@@ -85,12 +85,21 @@ class DatasetTests(unittest.TestCase):
         for entry in kb.ENTRIES:
             answer = kb.answer_from_dataset([{'role': 'user', 'content': entry['topic']}])
             self.assertTrue(answer)
-        for query in ['COUNT()', 'GROUP BY', 'คีย์หลัก', 'LEFT JOIN']:
+        for query in ['GROUP BY', 'คีย์หลัก', 'LEFT JOIN']:
             entries = kb.search(query, 2)
             answer = kb.answer_from_dataset([{'role': 'user', 'content': query}])
             for entry in entries:
                 self.assertIn(entry['description'], answer)
                 self.assertIn(entry['source'], answer)
+        # หัวข้อยาวที่ถามเจาะจงส่วนเดียว ได้เฉพาะส่วนนั้น แต่ทุกบรรทัดยังเป็นข้อความในหัวข้อนั้นตรงตัว
+        answer = kb.answer_from_dataset([{'role': 'user', 'content': 'COUNT()'}])
+        entry = kb.search('COUNT()', 1)[0]
+        self.assertIn('9.10.3 ฟังก์ชัน COUNT() การนับจำนวน', answer)
+        self.assertNotIn('9.10.4 ฟังก์ชัน SUM()', answer)
+        self.assertIn(entry['source'], answer)
+        body = answer.split('\n\nแหล่งข้อมูล:')[0].split('\n', 2)[2]
+        for line in body.split('\n'):
+            self.assertIn(line, entry['description'].split('\n'))
 
     def test_sources(self):
         manifest = json.loads(Path(kb.MANIFEST_PATH).read_text(encoding='utf-8'))

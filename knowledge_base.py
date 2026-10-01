@@ -203,21 +203,44 @@ def _is_meta(topic):
 _SQL_LANG_WORDS = {"sql", "ddl", "dml", "dcl", "data", "structured", "query"}
 
 
+def _heading_matches(query):
+    """พิมพ์หัวข้อในเล่มโดยไม่มีเลขหัวข้อ เช่น "โครงสร้างแฟ้มข้อมูลแบบเรียงลำดับ" "การทำนอมอลไลเซชัน" -> หัวข้อนั้น"""
+    asked = {_term_key(t) for t in _asked_terms(query)} - {""}
+    return [e for e in ENTRIES if not _is_meta(e["topic"]) and len(_term_key(_own_title(e))) >= 4
+            and asked & {_term_key(_heading(e)), _term_key(_own_title(e))}]
+
+
+def _special_topics(text):
+    """คำถามพื้นฐานที่ชื่อหัวข้อตอบไม่ตรง จึงกำหนดหัวข้อไว้เอง"""
+    text = text.lower().strip()
+    if re.search(r"(?:what is sql\b|(?<![\w-])sql\s*(?:คืออะไร|ทำอะไรได้|ใช้ทำอะไร|มีกี่ประเภท|มีกี่แบบ|แบ่งเป็น)"
+                 r"|ภาษา sql คือ|ความหมายของภาษา sql)", text):
+        return [e for e in ENTRIES if e["topic"].startswith("8.1 ")][:1]
+    # "JOIN คืออะไร" ถามคำสั่ง JOIN ทั่วไป: บทนำบทที่ 10 อธิบายการเชื่อมตาราง + ตารางรูปแบบ JOIN ทุกชนิดใน 10.2
+    # (ไม่งั้นได้ "10.1 การเกิด CARTESIAN JOIN" ซึ่งเป็น JOIN ชนิดเดียว)
+    if re.fullmatch(r"(คำสั่ง\s*)?join(\s+table)?", " ".join(_asked_terms(text)).strip()):
+        return [e for e in ENTRIES if e["topic"].startswith(("บทที่ 10 ", "10.2 "))]
+    return []
+
+
 def search(query, limit=6, min_score=1.0):
     """Require topic evidence: a word in the body alone is not evidence the book explains it."""
     text = query.lower().strip()
     exact = [entry for entry in ENTRIES if entry["topic"].lower() == text]
     if exact:
         return exact[:limit]
+    same = _heading_matches(query)
+    if same:
+        return same[:limit]
     # ระบุเลขหัวข้อมาตรง ๆ เช่น "7.5"
     num = re.search(r"(?<![\d.])(\d{1,2}\.\d{1,2})(?![\d.])", text)
     if num:
         by_num = [e for e in ENTRIES if e["topic"].startswith(num.group(1) + " ")]
         if by_num:
             return by_num[:1]
-    if re.search(r"(?:what is sql\b|(?<![\w-])sql\s*(?:คืออะไร|ทำอะไรได้|ใช้ทำอะไร|มีกี่ประเภท|มีกี่แบบ|แบ่งเป็น)"
-                 r"|ภาษา sql คือ|ความหมายของภาษา sql)", text):
-        return [e for e in ENTRIES if e["topic"].startswith("8.1 ")][:1]
+    special = _special_topics(text)
+    if special:
+        return special[:limit]
 
     if re.search(r"ภาคผนวก\s*[ค-ฮ]", text):
         return []   # ตำรามีแค่ภาคผนวก ก และ ข
@@ -499,17 +522,10 @@ def _source_line(e):
     return "แหล่งข้อมูล: " + (e.get("references") or e["topic"]) + " · ไฟล์ " + e["source"]
 
 
-def more_examples(current, shown_text):
-    """ตัวอย่างเรื่องที่คุยอยู่ จากหัวข้ออื่นในตำรา ครั้งละ 3 ตัวอย่าง ข้ามที่เคยแสดงแล้ว"""
-    terms = [t for e in current for t in key_terms(e)]
-    name = _topic_name(current)
-    if not terms:
-        return f"เรื่อง **{name}** ในตำรามีตัวอย่างเท่าที่แสดงไปแล้วด้านบนครับ\n\n" + related_topics(current, shown_text, lead=False)
-    shown_topics = {e["topic"] for e in current}
-    seen = re.sub(r"\s+", "", shown_text)
+def _find_examples(terms, skip_topics, seen):
     found = []
     for order, e in enumerate(ENTRIES):
-        if e["topic"] in shown_topics:
+        if e["topic"] in skip_topics:
             continue
         for snippet in _example_snippets(e, terms):
             if re.sub(r"\s+", "", snippet) not in seen:
@@ -517,11 +533,29 @@ def more_examples(current, shown_text):
                 rank = (0 if "```" in snippet else 1, 1 if _is_meta(e["topic"]) else 0, order)
                 found.append((rank, e, snippet))
     found.sort(key=lambda f: f[0])
-    found = [(e, snippet) for _, e, snippet in found]
+    return [(e, snippet) for _, e, snippet in found]
+
+
+def more_examples(current, shown_text, focus_terms=()):
+    """ตัวอย่างเรื่องที่คุยอยู่ จากหัวข้ออื่นในตำรา ครั้งละ 3 ตัวอย่าง ข้ามที่เคยแสดงแล้ว
+    focus_terms = ศัพท์ที่ถามเมื่อคำตอบล่าสุดแสดงแค่บางส่วนของหัวข้อ ("ทูเพิล" ในหัวข้อ 4.4, "COUNT" ในหัวข้อ 9.10)
+    หาตัวอย่างของศัพท์นั้นก่อน รวมส่วนที่ยังไม่ได้แสดงของหัวข้อเดิมด้วย"""
+    seen = re.sub(r"\s+", "", shown_text)
+    found, name = [], _topic_name(current)
+    focus_terms = [t for t in focus_terms if 2 <= len(t) <= 30]
+    if focus_terms:
+        found = _find_examples(focus_terms, set(), seen)
+        name = " / ".join(focus_terms) if found else name
+    terms = [t for e in current for t in key_terms(e)]
+    if not found and not terms:
+        return f"เรื่อง **{name}** ในตำรามีตัวอย่างเท่าที่แสดงไปแล้วด้านบนครับ\n\n" + related_topics(current, shown_text, lead=False)
+    if not found:
+        found = _find_examples(terms, {e["topic"] for e in current}, seen)
     if not found:
         return (f"ตัวอย่างเรื่อง **{name}** ในตำรามีเท่าที่แสดงไปแล้วครับ\n\n"
                 + related_topics(current, shown_text, lead=False))
-    blocks = [f"ตัวอย่างเพิ่มเติมเรื่อง **{name}** จากหัวข้ออื่นในตำรา"]
+    where = "ในตำรา" if any(e in current for e, _ in found) else "จากหัวข้ออื่นในตำรา"
+    blocks = [f"ตัวอย่างเพิ่มเติมเรื่อง **{name}** {where}"]
     for e, snippet in found[:EXAMPLES_PER_ANSWER]:
         blocks.append("### จาก " + e["topic"] + "\n\n" + with_figures(snippet) + "\n\n" + _source_line(e))
     rest = len(found) - EXAMPLES_PER_ANSWER
@@ -568,15 +602,500 @@ def related_topics(current, shown_text, lead=True):
 
 
 def render_topics(entries):
+    return render_plan([(e, None) for e in entries])
+
+
+# ---------------------------------------------------------------- ตอบเฉพาะส่วนที่ถาม
+# หัวข้อยาวมักอธิบายหลายเรื่อง เช่น 1.1 มีทั้งความหมายของข้อมูลและของสารสนเทศ ถาม "สารสนเทศคืออะไร"
+# จึงควรได้เฉพาะย่อหน้าที่อธิบายสารสนเทศ (พร้อมตัวอย่าง/รูป/ตารางที่ประกอบ) ไม่ใช่ทั้งหัวข้อ
+# ย่อหน้าที่แสดงยังเป็นข้อความจากตำราตรงตัวทุกตัวอักษร เพียงแต่ไม่แสดงย่อหน้าที่ไม่เกี่ยว
+FOCUS_MIN_CHARS = 1500   # หัวข้อสั้นกว่านี้แสดงทั้งหัวข้อ ตัดแล้วไม่ได้อ่านง่ายขึ้น
+BLOCK_CHARS = 1200       # นิยามยาวถึงนี้แล้ว หยุดที่ย่อหน้าถัดไป (ตาราง/รูปที่กำลังแสดงอยู่ยังแสดงจนครบ)
+PARTIAL_NOTE = "แสดงเฉพาะส่วนที่ตอบคำถาม แตะเพื่ออ่านทั้งหัวข้อ"
+
+
+def units(entry):
+    """ย่อหน้าของหัวข้อ: บล็อกโค้ดทั้งก้อน หรือทีละบรรทัด (ไฟล์ความรู้เก็บหนึ่งย่อหน้าต่อบรรทัด)"""
+    return [text for _, text in _blocks(entry["description"])]
+
+
+# ศัพท์เดียวกันสะกดได้หลายแบบ (ในตำราเองก็สะกดไม่เหมือนกันทุกที่) แปลงเป็นแบบเดียวก่อนเทียบ
+_SPELLINGS = [
+    (r"เอ็?น[ทต]ิตี้?", "เอ็นทิตี้"),
+    (r"แอ[ตทด]{0,2}ร?ิบิว[ตท]?์?", "แอตทริบิวต์"),
+    (r"เร็?[คก]{1,2}อร์ด", "เรคอร์ด"),
+    (r"ทู(?:เพิ้?ล|พิล|เปิล)", "ทูเพิล"),
+    (r"คาร์ดิน[ัา]ล?ลิ[ตท][ีิ]้?", "คาร์ดินัลลิตี้"),
+    (r"ซ[ุู][ปบ]?เปอร์คีย์", "ซุปเปอร์คีย์"),
+    (r"ส[กค]ีมา", "สกีมา"),
+    (r"ฟ[ิี][ลว]ด์", "ฟิลด์"),
+    (r"ไบ[ตท]์", "ไบต์"),
+    (r"นอร์?ม[ัอ]ลไลเซชั่?น", "นอมอลไลเซชัน"),
+    (r"นอร์?ม[ัอ]ลฟอร์ม?", "นอมอลฟอร์ม"),
+    (r"^ภาษา(?=\s*[a-z])", ""),                     # "ภาษา SQL" = "SQL"
+]
+
+
+def _term_key(text):
+    """รูปมาตรฐานของศัพท์ ใช้เทียบศัพท์ในคำถามกับศัพท์ที่ตำรานิยาม"""
+    text = text.lower().strip()
+    for pattern, repl in _SPELLINGS:
+        text = re.sub(pattern, repl, text)
+    return re.sub(r"[\s\-_:;,.'\"“”()]+", "", text)
+
+
+_NUM_MARK = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2})*)(?:\s*([.)])|\s)\s*")
+_CAPTION = re.compile(r"^(ภาพที่|ตารางที่)\s*\d")
+_EXPLAIN = re.compile(r"^จาก\s*(ภาพ|ตาราง)")
+_NOT_TERM = re.compile(r"^(จาก|หมายเหตุ|ข้อใด|ตัวอย่าง|รูปแบบ|โครงสร้างคำสั่ง|โครงสร้างการ|ตาราง|ที่มา|ภาพที่|ขั้น|วิธี|"
+                       r"สรุป|ประเภทคำสั่ง|[a-z_0-9(),.\s]+$)")
+_INTRO_END = re.compile(r"(ต่อไปนี้|ดังนี้|ได้แก่|ดังรายละเอียด\S*|ประกอบด้วย|มีดังนี้|:)\s*$")
+
+
+def _defined_terms(line):
+    """ศัพท์ที่บรรทัดนี้นิยามไว้ คืน (ชื่อศัพท์ทุกแบบ, นิยามเต็ม?)
+    - "ทูเพิล หมายถึง …" / "2) ฟิลด์ (Field) หมายถึง …" / "ภาษา SQL (Structured Query Language) เป็น…" -> นิยามเต็ม
+    - "ดีกรี (Degree)" / "1. ภาษาสำหรับนิยามข้อมูล (Data Definition Language: DDL)" -> หัวเรื่องของศัพท์ เนื้อหาอยู่บรรทัดถัดไป"""
+    text = _NUM_MARK.sub("", line).strip()
+    m = re.match(r"(?P<th>[^()|:“”\"]{1,45}?)\s*(?:หรือ\s*)?\((?P<en>[A-Za-z][^()]{0,60})\)\s*(?P<rest>.*)$", text)
+    if m and re.search(r"\d{4}|et al|&", m.group("en")):
+        m = None                            # วงเล็บเป็นการอ้างอิง "(Petersen, 2018)" ไม่ใช่ชื่อศัพท์
+    if m:
+        th, en, rest = m.group("th").strip(), m.group("en"), m.group("rest")
+        # "5) บิต (Bit) บิต เป็น…" / "…(DML) ภาษาสำหรับจัดการฐานข้อมูล เป็น…" ทวนชื่อศัพท์ก่อนนิยาม
+        full = bool(re.match(r"(?:" + re.escape(th) + r"\s*)?(หมายถึง|คือ|เป็น|จะ|มี|ถือ)", rest))
+        if rest and not full:
+            return [], False
+    else:
+        m = re.match(r"(?P<th>[^()|:“”\"]{1,30}?)\s*(หมายถึง|คือ)\s", text)
+        if not m:
+            return [], False
+        th, en, full = m.group("th").strip(), "", True
+    if not th or _NOT_TERM.match(th) or len(th) > 40 or re.search(r"(?<!ความ)เป็น|คือ|หมายถึง", th):
+        return [], False                    # "กระบวนการ 2NF เป็นการกำจัด (Partial Dependency)" เป็นประโยค ไม่ใช่ชื่อศัพท์
+    names = [th] + [p.strip() for p in th.split("หรือ") if p.strip()]
+    names += [p.strip() for p in re.split(r"[:,]| or ", en) if len(p.strip()) >= 2]
+    if en:
+        names.append(f"{th} ({en})")      # พิมพ์ทั้งชื่อไทยและอังกฤษตามหัวเรื่องในเล่ม
+    return list(dict.fromkeys(n for n in names if n)), full
+
+
+_DEFINITIONS = {"key": None, "index": {}}
+
+
+def definitions():
+    """ดัชนีศัพท์ที่ตำรานิยามไว้ในเนื้อหา: รูปมาตรฐานของศัพท์ -> [(หัวข้อ, เลขย่อหน้า, นิยามเต็ม?)]
+    (หัวข้อตามสารบัญมีแค่ 172 ชื่อ แต่ศัพท์อย่างทูเพิล ดีกรี ฟิลด์ DDL นิยามไว้ในเนื้อหาของหัวข้ออื่น)"""
+    if _DEFINITIONS["key"] is not ENTRIES:
+        index = {}
+        for e in ENTRIES:
+            own = _own_title(e)
+            for k, u in enumerate(units(e)):
+                names, full = _defined_terms(u)
+                if not names and k < 3 and own and re.match(re.escape(own) + r"\s*(หมายถึง|คือ|เป็น)", u):
+                    names, full = [own], True       # "เหมืองข้อมูล เป็น…" ต้นหัวข้อ "11.4 เหมืองข้อมูล"
+                for name in names:
+                    key = _term_key(name)
+                    if len(key) >= 2:
+                        index.setdefault(key, []).append((e, k, full))
+        # ชื่ออังกฤษในชื่อหัวข้อ "11.6 ปัญญาประดิษฐ์ (Artificial Intelligence: AI)" ใช้ถามแทนชื่อไทยได้
+        for e in ENTRIES:
+            thai = index.get(_term_key(_own_title(e)), [])
+            for name in _title_names(e)[1:] if thai else []:
+                key = _term_key(name)
+                index[key] = index.get(key, []) + [h for h in thai if h not in index.get(key, [])]
+        _DEFINITIONS.update(key=ENTRIES, index=index)
+    return _DEFINITIONS["index"]
+
+
+def definition_block(entry, start):
+    """ย่อหน้าที่อธิบายศัพท์ซึ่งนิยามไว้ที่ย่อหน้า start: ตัวนิยาม + ตัวอย่าง รูป ตาราง โค้ด และรายการย่อยที่ตามมา
+    หยุดเมื่อถึงศัพท์ถัดไป หัวเรื่องถัดไป หรือรูปใหม่ที่ไม่เกี่ยวกับศัพท์นี้"""
+    us = units(entry)
+    names, full = _defined_terms(us[start])
+    if full and start > 0:
+        prev_names, prev_full = _defined_terms(us[start - 1])
+        if prev_names and not prev_full and {_term_key(n) for n in prev_names} & {_term_key(n) for n in names}:
+            start -= 1          # หัวเรื่องของศัพท์ "ดีกรี (Degree)" อยู่บรรทัดก่อนนิยาม
+            names, full = prev_names, False
+    keys = {_term_key(n) for n in names}
+    mark = _NUM_MARK.match(us[start])
+    style = mark.group(2) if mark else None
+    picked, size = [start], len(us[start])
+    body_seen = full            # หัวเรื่องเฉย ๆ ต้องได้ย่อหน้าเนื้อหาอย่างน้อยหนึ่งย่อหน้า
+    intro = bool(_INTRO_END.search(us[start]))
+    example = in_list = explained = False
+    for k in range(start + 1, len(us)):
+        u = us[k].strip()
+        if not u:
+            continue
+        num = _NUM_MARK.match(u)
+        other_names, _ = _defined_terms(u)
+        other = other_names and not ({_term_key(n) for n in other_names} & keys)
+        enough = size >= BLOCK_CHARS
+        if u.startswith("```") or " | " in u or re.match(r"^ที่มา\s*:?", u):
+            pass                            # ตาราง โค้ด และที่มาของรูป ไปกับย่อหน้าก่อนหน้าเสมอ
+        elif _CAPTION.match(u):
+            if explained or (enough and not example):
+                break                       # รูปใหม่หลังคำอธิบายรูปก่อนหน้า = เรื่องถัดไป
+            in_list = False
+        elif _EXPLAIN.match(u):
+            explained, example, in_list = True, False, False
+        elif num and style and num.group(2) == style and "." not in num.group(1):
+            break                           # ข้อถัดไประดับเดียวกัน เช่น "2) ฟิลด์" ต่อจาก "1) แฟ้มข้อมูล"
+        elif other and not (num and (intro or in_list) and not re.search(r"\([A-Za-z]", u)):
+            break                           # ศัพท์อื่น (ยกเว้นข้อย่อยของรายการที่ศัพท์นี้เกริ่นไว้)
+        elif num:
+            if not (intro or in_list or not body_seen) or (enough and not in_list):
+                break
+            in_list = True
+        elif re.match(r"ตัวอย่าง(ที่\s*\d|การ)", u) or (enough and not in_list):
+            break                           # โจทย์ตัวอย่าง/การประยุกต์ใช้ เป็นเนื้อหาต่อยอด ไม่ใช่ความหมาย
+        elif u.startswith("ตัวอย่าง"):
+            example = True
+        elif not body_seen:
+            body_seen = True
+        elif re.match(r"(กระบวนการ|ขั้นตอน|ประโยชน์|ข้อดี|ข้อเสีย|วิธี|การประยุกต์)", u) and _INTRO_END.search(u):
+            break                           # เกริ่นรายการเรื่องใหม่ (ขั้นตอน/ประโยชน์) ไม่ใช่ความหมาย
+        elif example or (in_list and len(u) <= 200):
+            pass                            # ข้อมูลตัวอย่าง / คำอธิบายของข้อย่อย
+        elif len(u) <= 40 or not any(key in _term_key(u) for key in keys):
+            break                           # หัวเรื่องของเรื่องถัดไป หรือย่อหน้าที่ไม่ได้พูดถึงศัพท์นี้แล้ว
+        else:
+            in_list = False
+        picked.append(k)
+        size += len(u)
+        intro = bool(_INTRO_END.search(u))
+    return picked
+
+
+def _asked_terms(query):
+    """ศัพท์ที่ถาม: ตัดคำถาม/คำสุภาพทิ้ง ("สารสนเทศคืออะไรครับ" -> ["สารสนเทศ"], "COUNT ใช้ยังไง" -> ["COUNT"])
+    ถามเทียบ ("ข้อมูลกับสารสนเทศต่างกันยังไง") ได้ศัพท์ทั้งสองฝั่ง"""
+    text = re.sub(r"\s*(ใช้ยังไง|ใช้อย่างไร|ใช้ทำอะไร|ใช้งานยังไง|ใช้งานอย่างไร)", " ", query)
+    text = re.sub(r"^\s*(วิธีใช้งาน|วิธีใช้|การใช้งาน)\s*", " ", text)
+    text = re.sub(r"คืออะไร|หมายถึงอะไร|แปลว่าอะไร|อะไรคือ|หมายถึง|แปลว่า|คือ|ความหมายของ|ความหมาย|"
+                  r"ช่วยอธิบาย|อธิบาย|ช่วยบอก|บอกหน่อย|อยากรู้ว่า|อยากรู้|อยากทราบ|สงสัยว่า|"
+                  r"what\s+is|what\s+are|what's|define|definition\s+of|meaning\s+of|"
+                  r"ความแตกต่างระหว่าง|ความแตกต่าง|แตกต่างกัน|ต่างกัน|ต่างจาก|เปรียบเทียบ|เทียบ|ยังไง|อย่างไร|"
+                  r"ครับ|คับ|ค่ะ|คะ|นะ|จ้า|หน่อย|[?？!]", " ", text, flags=re.I)
+    parts = re.split(r"\s+กับ\s*|กับ|\s+และ\s+|\s+vs\.?\s+|\s*/\s*|,", text) if _COMPARE_RE.search(query) else [text]
+    return [p.strip() for p in parts if _term_key(p)]
+
+
+_DEFINE_RE = re.compile(r"คือ|หมายถึง|แปลว่า|ความหมาย|what\s+is|what's|define|meaning|ต่างกัน|แตกต่าง|ต่างจาก|เทียบ", re.I)
+
+
+def find_definition(term, prefer=()):
+    """ย่อหน้าที่ตำรานิยามศัพท์นี้ไว้ดีที่สุด คืน (หัวข้อ, เลขย่อหน้า, นิยามเต็ม?) หรือ None
+    ลำดับ: นิยามเต็มก่อนหัวเรื่องเฉย ๆ, หัวข้อที่ชื่อมีศัพท์นี้หรือค้นเจอจากชื่อหัวข้อก่อน, บทสรุป/แบบฝึกหัดทีหลัง,
+    นอกนั้นเอาที่นิยามไว้ก่อนในเล่ม ถ้าไม่มีนิยามเต็มของศัพท์นี้ ใช้นิยามเต็มในหัวข้อที่ค้นเจอซึ่งชื่อศัพท์มีคำที่ถาม
+    (ถาม "ฐานข้อมูล" ได้นิยาม "ระบบฐานข้อมูล" ในหัวข้อ 2.2 แทนป้ายในรูป "ฐานข้อมูล (DBMS)")"""
+    key = _term_key(term)
+    # เทียบด้วยชื่อหัวข้อ ไม่ใช่ตัวอ็อบเจกต์ (ENTRIES โหลดใหม่ทุกคำถาม คำถามที่มาพร้อมกันอาจถือคนละชุด)
+    order = {e["topic"]: n for n, e in enumerate(ENTRIES)}
+    preferred = {e["topic"] for e in prefer}
+    hits = definitions().get(key, [])
+    if not any(full and not _is_meta(e["topic"]) for e, _, full in hits):
+        near = [(e, k, full) for other, found in definitions().items() if key in other
+                for e, k, full in found if full and e["topic"] in preferred and not _is_meta(e["topic"])]
+        hits = near or hits
+    if not hits:
+        return None
+    return min(hits, key=lambda h: (_is_meta(h[0]["topic"]), not h[2],
+                                    key not in _term_key(h[0]["topic"]) and h[0]["topic"] not in preferred,
+                                    order.get(h[0]["topic"], 0), h[1]))
+
+
+def _heading(entry):
+    """ชื่อหัวข้อตามที่พิมพ์ในเล่มโดยไม่มีเลขหัวข้อ: "4.5 ประเภทของคีย์ · 3. คีย์หลัก (Primary Key)" -> "คีย์หลัก (Primary Key)" """
+    return re.sub(r"^(ภาคผนวก [กข] )?(\d+\.)+\d*\s*", "", entry["topic"].split(" · ")[-1]).strip()
+
+
+def _own_title(entry):
+    """ชื่อหัวข้อไม่เอาเลขหัวข้อ ชื่อหัวข้อหลัก และคำอธิบายในวงเล็บ: "4.5 ประเภทของคีย์ · 3. คีย์หลัก (Primary Key)" -> "คีย์หลัก" """
+    return re.sub(r"\s*\(.*$", "", _heading(entry)).strip()
+
+
+def _title_names(entry):
+    """ชื่อไทยของหัวข้อ + ชื่ออังกฤษในวงเล็บท้ายชื่อ: "11.6 ปัญญาประดิษฐ์ (Artificial Intelligence: AI)"
+    -> ["ปัญญาประดิษฐ์", "Artificial Intelligence", "AI"]"""
+    en = re.search(r"\(([A-Za-z][^()]*)\)\s*$", entry["topic"].split(" · ")[-1])
+    names = [_own_title(entry)] + (re.split(r"[:,]", en.group(1)) if en else [])
+    return [n.strip() for n in names if len(_term_key(n)) >= 2]
+
+
+def asks_meaning(query):
+    """ถามความหมาย/ความต่าง ("X คืออะไร", "X กับ Y ต่างกันยังไง") หรือพิมพ์แค่ชื่อศัพท์ที่ตำรานิยามไว้ ("ทูเพิล")"""
+    terms = _asked_terms(query)
+    return bool(_DEFINE_RE.search(query)) or (len(terms) == 1 and _term_key(terms[0]) in definitions())
+
+
+def definition_blocks(query, entry):
+    """ย่อหน้าที่หัวข้อนี้นิยามศัพท์ที่ถาม (เฉพาะคำถามความหมาย) หรือ [] ถ้าหัวข้อนี้ไม่ได้นิยามศัพท์นั้น"""
+    if not asks_meaning(query):
+        return []
+    picked = set()
+    for term in _asked_terms(query):
+        hits = [h for h in definitions().get(_term_key(term), []) if h[0]["topic"] == entry["topic"]]
+        if hits:
+            e, k, _ = min(hits, key=lambda h: (not h[2], h[1]))
+            picked |= set(definition_block(e, k))
+    return sorted(picked)
+
+
+def names_topic(query):
+    """ถามด้วยชื่อหัวข้อเต็ม เลขหัวข้อ (7.5) หรือบท (แบบฝึกหัดบทที่ 7) = ต้องการทั้งหัวข้อนั้น ไม่ต้องตีความ"""
+    text = query.lower().strip()
+    return (any(e["topic"].lower() == text for e in ENTRIES)
+            or bool(re.search(r"(?<![\d.])\d{1,2}\.\d{1,2}(?![\d.])|บทที่|ภาคผนวก", text)))
+
+
+def plan_answer(query):
+    """เลือกหัวข้อและย่อหน้าที่ตอบคำถาม โดยไม่ใช้ AI: [(หัวข้อ, เลขย่อหน้า หรือ None = ทั้งหัวข้อ)]
+    ถามความหมายของศัพท์ -> เฉพาะย่อหน้าที่นิยามศัพท์นั้น (ถ้าหัวข้อยาว), ถามชื่อหัวข้อ/เลขหัวข้อ/อย่างอื่น -> ทั้งหัวข้อ"""
+    return _plan(query)[0]
+
+
+def _plan(query):
+    """(แผนคำตอบ, มั่นใจไหม) — มั่นใจเมื่อถามด้วยชื่อ/เลขหัวข้อ, ศัพท์ที่ตำรานิยามไว้ หรือหัวเรื่องย่อยตรงตัว
+    ไม่มั่นใจ = ได้หัวข้อจากคำที่ตรงกับชื่อหัวข้อเท่านั้น ซึ่งพลาดได้กับคำถามที่คนพิมพ์เอง"""
+    entries = search(query, limit=3)
+    terms = _asked_terms(query)
+    whole = [(e, None) for e in entries]
+    if names_topic(query) or not terms:
+        return whole, bool(entries) and names_topic(query)
+    if _special_topics(query) and not asks_meaning(query):
+        return whole, True             # "SQL แบ่งเป็นกี่ประเภท" "JOIN" กำหนดหัวข้อไว้แล้ว
+    plan, all_found = _meaning_plan(terms, entries) if asks_meaning(query) else ([], False)
+    if plan and all_found:
+        return plan, True
+    if len(terms) > 1 and len(entries) >= len(terms) and _COMPARE_RE.search(query):
+        return whole, True             # "INNER JOIN กับ LEFT JOIN ต่างกันยังไง" ค้นเจอครบทุกฝั่งจากชื่อหัวข้อ
+    if _heading_matches(query):        # พิมพ์ชื่อหัวข้อในเล่ม (ไม่มีเลข) -> ทั้งหัวข้อ
+        return whole, True
+    sub = _subheading_plan(terms[0], entries) if len(terms) == 1 else []
+    if sub:
+        return sub, True
+    # คำถามมีชื่อหัวข้อสั้นที่ค้นเจอเป็นอันดับแรกอยู่ทั้งชื่อ ("ทำไมต้องมีคีย์หลัก" -> "คีย์หลัก (Primary Key)")
+    # แสดงทั้งหัวข้อได้โดยไม่เกินคำถาม ไม่ต้องให้ AI ตีความ (AI เคยเลือก "ซุปเปอร์คีย์" แทน)
+    if len(entries) == 1 and len(entries[0]["description"]) < FOCUS_MIN_CHARS \
+            and len(_own_title(entries[0])) >= 4 and _term_key(_own_title(entries[0])) in _term_key(query):
+        return whole, True
+    # ถามประเภท วิธีใช้ ("GROUP BY ใช้ยังไง") หรือคำที่ตรงกับชื่อหัวข้อบางส่วน -> ทั้งหัวข้อ
+    return plan or whole, False
+
+
+_SUBNUM = re.compile(r"^\d{1,2}\.\d{1,2}\.\d{1,2}\s")   # หัวเรื่องระดับที่สามในเล่ม "9.10.3 ฟังก์ชัน COUNT()…"
+_CATEGORY = r"(ข้อดี|ข้อเสีย|ข้อจำกัด|ประเภท|ชนิด|คุณสมบัติ|ความหมาย|ตัวอย่าง|ลักษณะ|ประโยชน์|วิธี|ขั้นตอน|สรุป)"
+
+
+def _is_subheading(us, k):
+    """หัวเรื่องย่อยในเนื้อหา: "9.10.3 ฟังก์ชัน COUNT() การนับจำนวน" หรือบรรทัดสั้นที่ตามด้วยย่อหน้าเนื้อหา
+    เช่น "ข้อดีของแบบจำลองฐานข้อมูลเชิงสัมพันธ์" (ป้ายในรูปมักเป็นบรรทัดสั้นติดกันหลายบรรทัด จึงไม่นับ)"""
+    u = us[k].strip()
+    if _SUBNUM.match(u):
+        return True
+    if (not 4 <= len(u) <= 70 or " | " in u or u.startswith("```") or _CAPTION.match(u) or _EXPLAIN.match(u)
+            or u.startswith("ที่มา") or _INTRO_END.search(u) or _NUM_MARK.match(u)):
+        return False
+    nxt = next((x.strip() for x in us[k + 1:] if x.strip()), "")
+    return len(nxt) >= len(u) + 15 or bool(_NUM_MARK.match(nxt) or _INTRO_END.search(nxt))
+
+
+def subheading_block(entry, k):
+    """หัวเรื่องย่อยที่ย่อหน้า k จนถึงหัวเรื่องถัดไประดับเดียวกัน
+    หัวเรื่องที่พูดถึงเรื่องเดียวกันและไม่ได้ขึ้นต้นด้วยข้อดี/ประเภท/ตัวอย่าง… เป็นหัวข้อย่อยของมัน
+    ("ประเภทของแอตทริบิวต์" มี "คีย์แอตทริบิวต์ (Key Attribute)" เป็นหัวข้อย่อย แต่ "ข้อดีของ X" จบที่ "ข้อจำกัดของ X")"""
+    us = units(entry)
+    head = us[k].strip()
+    subject = _term_key(re.sub(r"^" + _CATEGORY + r"(ของ|ที่)?", "", head))
+    picked = [k]
+    for j in range(k + 1, len(us)):
+        u = us[j].strip()
+        if _SUBNUM.match(head):
+            if _SUBNUM.match(u):
+                break
+        elif _is_subheading(us, j) and (re.match(_CATEGORY, u) or not subject or subject not in _term_key(u)):
+            break
+        picked.append(j)
+    return picked
+
+
+_SUBHEADINGS = {"key": None, "index": {}}
+
+
+def subheadings():
+    """ดัชนีหัวเรื่องย่อยในเนื้อหา: รูปมาตรฐานของหัวเรื่อง (ไม่เอาเลข 9.10.3) -> [(หัวข้อ, เลขย่อหน้า)]"""
+    if _SUBHEADINGS["key"] is not ENTRIES:
+        index = {}
+        for e in ENTRIES:
+            us = units(e)
+            for k in range(len(us)):
+                if _is_subheading(us, k):
+                    key = _term_key(_SUBNUM.sub("", us[k].strip()))
+                    if len(key) >= 6:
+                        index.setdefault(key, []).append((e, k))
+        _SUBHEADINGS.update(key=ENTRIES, index=index)
+    return _SUBHEADINGS["index"]
+
+
+def _subheading_plan(term, entries):
+    """ถามหัวเรื่องย่อยในเนื้อหา ("ข้อดีของแบบจำลองฐานข้อมูลเชิงสัมพันธ์", "คุณสมบัติของรีเลชันที่สำคัญ")
+    หรือศัพท์ที่เป็นหัวเรื่องระดับที่สามของหัวข้อที่ค้นเจอ ("COUNT ใช้ยังไง" -> "9.10.3 ฟังก์ชัน COUNT()")
+    -> เฉพาะส่วนนั้นของหัวข้อยาว"""
+    key = _term_key(term)
+    hits = [(e, k) for e, k in subheadings().get(key, [])
+            if len(e["description"]) >= FOCUS_MIN_CHARS and not _is_meta(e["topic"])]
+    hits.sort(key=lambda h: all(h[0]["topic"] != e["topic"] for e in entries))   # หัวข้อที่ค้นเจอจากชื่อก่อน
+    if not hits and entries and len(entries[0]["description"]) >= FOCUS_MIN_CHARS and len(key) >= 3:
+        us = units(entries[0])
+        found = [k for k, u in enumerate(us) if _SUBNUM.match(u.strip()) and key in _term_key(u)]
+        if len(found) == 1:
+            hits = [(entries[0], found[0])]
+    if not hits:
+        return []
+    e, k = hits[0]
+    block = subheading_block(e, k)
+    if block[-1] == len(units(e)) - 1 and len(section_parts(e)) > 1:
+        return [(e, None)]      # "ประเภทของเอ็นทิตี้" เป็นหัวเรื่องท้ายหัวข้อ เนื้อหาอยู่ในหัวข้อย่อยที่แบ่งไว้ทุกส่วน
+    return [(e, block)]
+
+
+def _meaning_plan(terms, entries):
+    """ถามความหมาย: ย่อหน้าที่ตำรานิยามแต่ละศัพท์ (หัวข้อยาว) หรือทั้งหัวข้อ (หัวข้อสั้น/หัวข้อที่ชื่อคือศัพท์นั้น)"""
+    plan = []
+    for term in terms:
+        # หัวข้อที่ชื่อคือศัพท์นี้ ("5.3 เอ็นทิตี้") หรือเป็นหัวข้อความหมายของศัพท์นี้
+        # ("5.1 ความหมายและความเป็นมา (บทที่ 5 … (ER Diagram))") เชื่อได้กว่าประโยคที่แค่หน้าตาเหมือนนิยาม
+        # (เช่น "6.2.2 การแปลง (ER-Diagram) เป็นรีเลชัน…" ซึ่งพูดถึงการแปลง ไม่ใช่ความหมายของ ER Diagram)
+        titled = next((e for e in entries if _term_key(term) in {_term_key(n) for n in _title_names(e)}
+                       or ("ความหมาย" in e["topic"] and _term_key(term) in _term_key(e["topic"]))), None)
+        found = find_definition(term, prefer=entries)
+        if found and _is_meta(found[0]["topic"]) and any(not _is_meta(e["topic"]) for e in entries):
+            found = None                    # นิยามในแบบฝึกหัด/บทสรุป ใช้เมื่อไม่มีหัวข้อเนื้อหาที่ตอบได้เท่านั้น
+        if titled and (not found or found[0] is not titled):
+            # หัวข้อชื่อตรงกับศัพท์ เช่น "5.3 เอ็นทิตี้": ตอบส่วนนำของหัวข้อ ไม่ต้องรวมหัวข้อย่อยทุกประเภท
+            plan.append((titled, [] if len(titled["description"]) < FOCUS_MIN_CHARS else None))
+        elif found:
+            e, k, _ = found
+            plan.append((e, definition_block(e, k) if len(e["description"]) >= FOCUS_MIN_CHARS else []))
+    # ศัพท์สองคำในหัวข้อเดียวกัน (ข้อมูล / สารสนเทศ ใน 1.1) รวมเป็นคำตอบเดียว
+    merged = {}
+    for e, picked in plan:
+        t = e["topic"]
+        if t in merged and merged[t][1] is not None and picked:
+            merged[t] = (e, sorted(set(merged[t][1]) | set(picked)))
+        else:
+            merged.setdefault(t, (e, picked))
+    return list(merged.values()), len(plan) == len(terms)
+
+
+def _shows_terms(plan, terms):
+    """ข้อความที่จะแสดงตามแผนนี้มีศัพท์ที่ถามอยู่จริงไหม (เทียบแบบไม่สนช่องว่าง/ตัวพิมพ์/การสะกดที่ต่างกัน)"""
+    keys = {_term_key(t) for t in terms} - {""}
+    shown = []
+    for e, picked in plan:
+        if picked is None:
+            shown += [u for p in section_parts(e) for u in units(p)]
+        else:
+            shown += units(e) if not picked else [units(e)[k] for k in picked]
+    # ต้องอยู่ในย่อหน้าเนื้อหา ไม่ใช่แค่ข้อในรายการ/ช่องในตาราง ("- Sql Injection" ในตาราง 12.2 ไม่ได้อธิบายว่าคืออะไร)
+    text = _term_key(" ".join(u for u in shown if not u.lstrip().startswith("-") and " | " not in u))
+    return any(k in text for k in keys)
+
+
+def render_plan(plan):
+    """plan: [(หัวข้อ, ย่อหน้าที่เลือก)] ย่อหน้าที่เลือก None = ทั้งหัวข้อรวมหัวข้อย่อยทุกส่วน,
+    [] = ทั้งหัวข้อเฉพาะส่วนนี้ (ไม่รวมหัวข้อย่อย), [เลข...] = เฉพาะย่อหน้าเหล่านั้น ตามลำดับในเล่ม"""
     blocks = []
-    for e in (part for entry in entries for part in section_parts(entry)):
-        # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
-        blocks.append("\n\n".join(["## " + e["topic"], with_figures(e["description"]), _source_line(e)]))
+    whole = {entry["topic"] for entry, picked in plan if picked is None}
+    shown = set()
+    for entry, picked in plan:
+        main = entry["topic"].split(" · ")[0]
+        if entry["topic"] in shown or (main != entry["topic"] and main in whole):
+            continue                           # แสดงไปแล้ว หรือรวมอยู่ในหัวข้อหลักที่แสดงครบทุกส่วน
+        shown.add(entry["topic"])
+        parts = section_parts(entry) if picked is None else [entry]
+        for e in parts:
+            us = units(e)
+            partial = bool(picked) and len(set(picked)) < len(us)
+            text = "\n".join(us[k] for k in sorted(set(picked))) if partial else e["description"]
+            # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
+            block = ["## " + e["topic"], with_figures(text), _source_line(e)]
+            more = [e["topic"]] if partial else []
+            if picked is not None and len(section_parts(e)) > 1:
+                more = [e["topic"]]            # หัวข้อย่อยที่ไม่ได้แสดง อ่านต่อได้จากหัวข้อหลัก
+            if more:
+                block.append(PARTIAL_NOTE + "\n" + "\n".join(f"[[ถาม:{t}]]" for t in more))
+            blocks.append("\n\n".join(block))
     return "\n\n---\n\n".join(blocks)
 
 
-def answer_from_dataset(history):
-    """No generated prose: render only stored fields, with traceable provenance."""
+def question_key(query):
+    """รูปมาตรฐานของคำถาม: พิมพ์ต่างกันเล็กน้อยถือเป็นคำถามเดียวกัน ได้คำตอบเดียวกัน
+    ("SQL คืออะไร", "sql คืออะไรครับ?", "sql  คือ อะไร" -> "sql คืออะไร")"""
+    text = re.sub(r"[\s?？!.,ๆ\"'“”]+", " ", query.lower()).strip()
+    text = re.sub(r"(?<=[฀-๿]) (?=[฀-๿])", "", text)          # ช่องว่างระหว่างคำไทยไม่มีความหมาย
+    return re.sub(r"\s*(ครับ|คับ|ค่ะ|คะ|นะคะ|นะครับ|นะ|จ้า|จ้ะ|หน่อย)+$", "", text).strip()
+
+
+def plan_to_json(plan):
+    return [{"topic": e["topic"], "picked": picked} for e, picked in plan]
+
+
+def plan_from_json(items):
+    """แผนที่จำไว้ -> แผนของตำราที่โหลดอยู่ หรือ None ถ้าอ้างหัวข้อ/ย่อหน้าที่ไม่มีแล้ว"""
+    by_topic = {e["topic"]: e for e in ENTRIES}
+    plan = []
+    for item in items if isinstance(items, list) else []:
+        e = by_topic.get(item.get("topic")) if isinstance(item, dict) else None
+        picked = item.get("picked") if e else None
+        if e is None or not (picked is None or (isinstance(picked, list) and
+                                                all(isinstance(k, int) and 0 <= k < len(units(e)) for k in picked))):
+            return None
+        plan.append((e, picked))
+    return plan if isinstance(items, list) else None
+
+
+def _decide(query, plan, selector, memory):
+    """คำถามที่ต้องตีความ (วิธีค้นเองไม่มั่นใจ):
+    1) เคยตอบคำถามนี้แล้ว -> คำตอบเดิม (AI ตอบไม่เหมือนเดิมทุกครั้ง จึงต้องจำ ไม่ถาม AI ซ้ำ)
+    2) ยังไม่เคย -> ให้ AI ช่วยเลือก แล้วจำคำตอบที่แสดงไว้ (รวมกรณีที่ AI ใช้ไม่ได้และตอบด้วยวิธีค้นเอง)
+    3) จำเพิ่มไม่ได้ (บน Vercel) -> ไม่เรียก AI สด ใช้วิธีค้นเองซึ่งได้ผลเดิมทุกครั้ง"""
+    book = DOCUMENT_META.get("markdown_sha256")
+    key = question_key(query)
+    if memory is not None:
+        stored = memory.get(key, book)
+        restored = plan_from_json(stored.get("plan")) if isinstance(stored, dict) else None
+        if restored is not None:
+            return restored
+        if not memory.writable:
+            return plan
+    if not selector:
+        return plan
+    chosen = selector(query)
+    # ค้นเองไม่เจอเลยและถามความหมายของศัพท์ ("MySQL คืออะไร"): ย่อหน้าที่ AI เลือกต้องมีศัพท์นั้นอยู่จริง
+    # ไม่งั้นเป็นแค่หัวข้อที่เรื่องใกล้เคียง (ตำราไม่ได้อธิบายศัพท์นั้น) ตอบว่าไม่มีข้อมูลตามเดิม
+    # AI เลือกได้แค่แบบฝึกหัด/บทสรุปทั้งที่ไม่ได้ถามถึง (เคยสุ่มพลาดครั้งหนึ่ง) ใช้ผลค้นเองแทน
+    only_meta = chosen and plan and all(e["topic"].startswith(("แบบฝึกหัด", "บทสรุป")) for e, _ in chosen) \
+        and not any(k in query.lower() for k in _META_WORDS)
+    if chosen and not only_meta and (plan or not asks_meaning(query) or _shows_terms(chosen, _asked_terms(query))):
+        plan, source = chosen, "AI"
+    elif chosen is None:
+        source = "ค้นเอง (เรียก AI ไม่สำเร็จ)"
+    else:
+        source = "ค้นเอง (AI ไม่พบหรือผลไม่ผ่านการตรวจ)"
+    if memory is not None:
+        memory.put(key, book, plan_to_json(plan), source)
+    return plan
+
+
+def answer_from_dataset(history, selector=None, memory=None):
+    """No generated prose: render only stored fields, with traceable provenance.
+    selector (ไม่บังคับ) = ตัวช่วยเลือกหัวข้อ/ย่อหน้าด้วย AI (ai_select.plan_answer) คืนแผนแบบ plan_answer
+    หรือ None/[] เมื่อใช้ไม่ได้หรือไม่เจอ ซึ่งจะกลับมาใช้วิธีค้นแบบเดิม
+    memory (ไม่บังคับ) = answer_memory.AnswerMemory จำคำตอบของคำถามที่ต้องตีความ ถามซ้ำได้คำตอบเดิมเสมอ"""
     global ENTRIES
     # Revalidate on each answer, including when files change after startup.
     ENTRIES = load_entries()
@@ -615,13 +1134,22 @@ def answer_from_dataset(history):
             last_answer.startswith("ตัวอย่างเพิ่มเติมเรื่อง") and _AGAIN_RE.search(query.strip())
             and not _RELATED_RE.search(query))
         if asking_examples and (not mentioned or {e["topic"] for e in mentioned} <= current_topics):
-            return more_examples(current, shown_text)
+            # คำตอบก่อนหน้าแสดงเฉพาะส่วน: ตัวอย่างของศัพท์ที่ถาม ไม่ใช่ของทั้งหัวข้อ
+            asked = _asked_terms(questions[-2]) if PARTIAL_NOTE in last_answer and len(questions) > 1 else []
+            return more_examples(current, shown_text, focus_terms=asked)
         if _MORE_RE.search(query) and not mentioned:
+            # คำตอบล่าสุดแสดงแค่ส่วนที่ถาม: "อธิบายเพิ่ม" "มีอีกไหม" = อ่านทั้งหัวข้อ, "…ที่เกี่ยวข้อง" = หัวข้ออื่น
+            if PARTIAL_NOTE in last_answer and not re.search(r"เกี่ยว", query):
+                return render_topics(current)
             return related_topics(current, shown_text)
 
-    entries = search(query, limit=3)
-    if not entries and len(questions) > 1 and query.startswith(("แล้ว", "อธิบายต่อ")):
-        entries = search(questions[-2] + " " + query, limit=3)
-    if not entries:
+    # วิธีค้นเองมั่นใจ (ชื่อหัวข้อ, ศัพท์ที่ตำรานิยามไว้, หัวเรื่องย่อยตรงตัว) ได้ผลเดิมทุกครั้ง ไม่ต้องใช้ AI
+    # นอกนั้นใช้คำตอบที่จำไว้ หรือให้ AI ช่วยตีความแล้วจำไว้
+    plan, sure = _plan(query)
+    if not sure:
+        plan = _decide(query, plan, selector, memory)
+    if not plan and len(questions) > 1 and query.startswith(("แล้ว", "อธิบายต่อ")):
+        plan = plan_answer(questions[-2] + " " + query)
+    if not plan:
         return NO_DATA
-    return render_topics(entries)
+    return render_plan(plan)

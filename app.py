@@ -2,12 +2,35 @@ from flask import Flask, render_template, request, jsonify, Response, stream_wit
 import os, json, re, hashlib
 from datetime import datetime, timezone
 
+
+def load_env_file(path=os.path.join(os.path.dirname(__file__), ".env")):
+    """อ่านไฟล์ .env (บรรทัด KEY=VALUE) ตอนรันในเครื่อง — บน Vercel ตั้งค่าใน Environment Variables แทน
+    ค่าที่ตั้งไว้ในระบบแล้วไม่ถูกเขียนทับ"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                key, sep, value = line.strip().partition("=")
+                if sep and key and not key.startswith("#"):
+                    os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+    except OSError:
+        pass
+
+
+load_env_file()
+
 import knowledge_base as kb
+import ai_select
+from answer_memory import AnswerMemory
 
 app = Flask(__name__)
 
 # บน Vercel ระบบไฟล์เป็น read-only ยกเว้น /tmp การเขียนที่อื่นจะทำให้แอปพังตั้งแต่ import
 ON_SERVERLESS = bool(os.getenv("VERCEL"))
+
+# คำตอบของคำถามที่ต้องตีความ (ถามซ้ำได้คำตอบเดิม) — ในเครื่องบันทึกเพิ่มได้ บน Vercel ใช้เฉพาะที่ commit ขึ้นไป
+# เพราะเครื่องแต่ละตัวบน Vercel ไม่มีที่เก็บร่วมกัน ถ้าให้ AI ตอบสดจะได้คำตอบต่างกันคนละเครื่อง
+ANSWERS_PATH = os.path.join(os.path.dirname(__file__), "ai_answers.json")
+answer_memory = AnswerMemory(ANSWERS_PATH, writable=False if ON_SERVERLESS else None, model=ai_select.model_label())
 DATA_DIR = os.getenv("DATA_DIR") or (
     "/tmp/ch-bot-data" if ON_SERVERLESS else os.path.join(os.path.dirname(__file__), "data")
 )
@@ -63,8 +86,9 @@ def clean_history(raw):
 
 
 def stream_reply(history):
-    """Extract stored content without a generative model."""
-    yield kb.answer_from_dataset(history)
+    """Extract stored content: ถ้าตั้ง GEMINI_API_KEY ไว้ AI ช่วยเลือกหัวข้อ/ย่อหน้า แต่ข้อความทั้งหมดมาจากตำรา"""
+    yield kb.answer_from_dataset(history, selector=ai_select.plan_answer if ai_select.enabled() else None,
+                                 memory=answer_memory)
 
 
 def page_version():
