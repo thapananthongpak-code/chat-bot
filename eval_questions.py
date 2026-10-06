@@ -1,7 +1,7 @@
 """ชุดคำถามทดสอบว่าบอทตอบตรงคำถาม และไม่ดึงเนื้อหาเกินจากที่ถาม
 
 รัน:   ./venv/bin/python eval_questions.py            ทดสอบแบบไม่ใช้ AI (เหมือนตอนไม่ได้ตั้ง API key)
-       ./venv/bin/python eval_questions.py --ai       ให้ AI ช่วยเลือก (ANTHROPIC_API_KEY หรือ GEMINI_API_KEY ใน .env)
+       ./venv/bin/python eval_questions.py --ai       ให้ AI ช่วยเลือก (ต้องมี GEMINI_API_KEY ใน .env)
                                                       ใช้ที่จำคำตอบชั่วคราว วัดความสามารถของ AI โดยไม่แตะ ai_answers.json
        ./venv/bin/python eval_questions.py --ai --pin บันทึกคำตอบลง ai_answers.json (commit ขึ้นเว็บ) ข้อที่จำไว้แล้วใช้ของเดิม
        เพิ่ม --fresh เพื่อลบคำตอบที่จำไว้ใน ai_answers.json ก่อน (ให้ AI ตอบใหม่ทั้งหมด)
@@ -158,20 +158,18 @@ def main():
     import knowledge_base as kb
     from answer_memory import AnswerMemory
     if not use_ai:
-        for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
-            os.environ.pop(name, None)
+        os.environ.pop("GEMINI_API_KEY", None)
     elif not ai_select.enabled():
-        sys.exit("ต้องมี ANTHROPIC_API_KEY หรือ GEMINI_API_KEY ใน .env หรือ environment ถึงจะทดสอบแบบใช้ AI ได้")
+        sys.exit("ต้องมี GEMINI_API_KEY ใน .env หรือ environment ถึงจะทดสอบแบบใช้ AI ได้")
     selector, calls = None, []
     if use_ai:
-        print(f"AI: {ai_select.provider()} {ai_select.model_label()}")
+        print(f"AI: {ai_select.model_label()}")
         generate = ai_select._generate
 
         def counted(*a, **kw):
-            if ai_select.provider() == "gemini":
-                # โควตาฟรีของ Gemini 15 ครั้ง/นาที/รุ่น: เว้นระยะให้ไม่เกิน 14 ครั้งในหนึ่งนาที
-                while len(calls) >= 14 and time.time() - calls[-14] < 61:
-                    time.sleep(1)
+            # โควตาฟรีของ Gemini 15 ครั้ง/นาที/รุ่น: เว้นระยะให้ไม่เกิน 14 ครั้งในหนึ่งนาที
+            while len(calls) >= 14 and time.time() - calls[-14] < 61:
+                time.sleep(1)
             calls.append(time.time())
             return generate(*a, **kw)
         ai_select._generate = counted

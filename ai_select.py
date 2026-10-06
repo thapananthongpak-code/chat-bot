@@ -1,9 +1,8 @@
-"""ให้ AI ช่วยอ่านคำถามที่คนพิมพ์เอง แล้วเลือกว่าหัวข้อและย่อหน้าไหนในตำราตอบคำถามนั้น
+"""ให้ AI (Gemini) ช่วยอ่านคำถามที่คนพิมพ์เอง แล้วเลือกว่าหัวข้อและย่อหน้าไหนในตำราตอบคำถามนั้น
 
 AI ไม่ได้เขียนคำตอบ: AI ส่งกลับมาแค่ "เลขหัวข้อ" กับ "เลขย่อหน้า" ระบบตรวจว่าเป็นเลขที่มีอยู่จริง
 แล้วนำข้อความจากตำรามาแสดงตรงตัว (knowledge_base.render_plan) AI จึงเติมคำหรือแต่งเนื้อหาเองไม่ได้
-ใช้ Claude เมื่อตั้ง ANTHROPIC_API_KEY, ใช้ Gemini เมื่อตั้ง GEMINI_API_KEY (มีทั้งคู่ใช้ Claude, บังคับได้ด้วย AI_PROVIDER)
-ไม่ได้ตั้ง key หรือเรียก AI ไม่สำเร็จ (โควตาเต็ม, เน็ตหลุด, ช้าเกิน) -> คืน None ให้ใช้วิธีค้นแบบเดิม
+ไม่ได้ตั้ง GEMINI_API_KEY หรือเรียก AI ไม่สำเร็จ (โควตาเต็ม, เน็ตหลุด, ช้าเกิน) -> คืน None ให้ใช้วิธีค้นแบบเดิม
 AI ตอบไม่เหมือนเดิมทุกครั้ง: ผลที่ได้ถูกจำไว้ใน answer_memory.py ถามซ้ำจึงได้คำตอบเดิม
 """
 
@@ -22,84 +21,28 @@ try:   # Python จาก python.org บน macOS ไม่มีใบรับ
 except ImportError:
     _SSL = ssl.create_default_context()
 
-try:
-    import anthropic
-except ImportError:          # ใช้แค่ Gemini ก็ได้ ไม่ต้องติดตั้ง
-    anthropic = None
-
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 # flash-lite ตอบใน ~1 วินาทีเมื่อปิดการคิดยาว (thinkingLevel minimal) และโควตาฟรีมากกว่ารุ่น flash
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"     # เปลี่ยนได้ด้วย ANTHROPIC_MODEL เช่น claude-sonnet-5-5, claude-haiku-4-5
 TIMEOUT = 15          # วินาทีต่อการเรียกหนึ่งครั้ง ช้ากว่านี้ใช้วิธีค้นแบบเดิมแทน
 MAX_SECTIONS = 3
-PARA_PREVIEW = 300    # AI เห็นแต่ละย่อหน้าแค่ช่วงต้น พอให้รู้ว่าพูดเรื่องอะไร (ประหยัดเวลาและค่าใช้จ่าย)
-
-
-def provider():
-    """"anthropic" | "gemini" | None ตาม key ที่ตั้งไว้"""
-    forced = os.getenv("AI_PROVIDER", "").strip().lower()
-    has_claude = bool(os.getenv("ANTHROPIC_API_KEY", "").strip()) and anthropic is not None
-    has_gemini = bool(os.getenv("GEMINI_API_KEY", "").strip())
-    if forced in ("anthropic", "claude"):
-        return "anthropic" if has_claude else None
-    if forced == "gemini":
-        return "gemini" if has_gemini else None
-    return "anthropic" if has_claude else "gemini" if has_gemini else None
+PARA_PREVIEW = 300    # AI เห็นแต่ละย่อหน้าแค่ช่วงต้น พอให้รู้ว่าพูดเรื่องอะไร (ประหยัดเวลาและโควตา)
 
 
 def enabled():
-    return provider() is not None
+    return bool(os.getenv("GEMINI_API_KEY", "").strip())
 
 
 def model_label():
     """ชื่อรุ่น AI ที่ใช้อยู่ (บันทึกไว้คู่กับคำตอบที่จำ)"""
-    if provider() == "anthropic":
-        return os.getenv("ANTHROPIC_MODEL", "").strip() or DEFAULT_CLAUDE_MODEL
-    if provider() == "gemini":
-        return os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
-    return ""
+    return (os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL) if enabled() else ""
 
 
-def _generate(system, prompt, schema, static=""):
-    """เรียก AI ให้ตอบเป็น JSON ตาม schema
-    static = ข้อความยาวที่เหมือนกันทุกคำถาม (รายชื่อหัวข้อทั้งเล่ม) Claude เก็บเป็น prompt cache ได้"""
-    if provider() == "anthropic":
-        return _claude(system, prompt, schema, static)
-    return _gemini(system, prompt + ("\n\n" + static if static else ""), schema)
-
-
-_CLIENT = {}
-
-
-def _claude(system, prompt, schema, static):
-    model = model_label()
-    key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-    if _CLIENT.get("key") != key:
-        # SDK ลองใหม่เองเมื่อเจอ 429/5xx/เน็ตหลุด 1 ครั้ง นานสุดราว 30 วินาทีแล้วใช้วิธีค้นเองแทน
-        _CLIENT.update(key=key, client=anthropic.Anthropic(api_key=key, timeout=TIMEOUT, max_retries=1))
-    blocks = [{"type": "text", "text": system}]
-    if static:
-        blocks.append({"type": "text", "text": static, "cache_control": {"type": "ephemeral"}})
-    config = {"format": {"type": "json_schema", "schema": schema}}
-    if not model.startswith("claude-haiku"):
-        config["effort"] = "low"       # งานเลือกเลขหัวข้อ ไม่ต้องคิดยาว (Haiku 4.5 ไม่รองรับ effort)
-    response = _CLIENT["client"].messages.create(
-        model=model, max_tokens=4000, system=blocks,
-        messages=[{"role": "user", "content": prompt}], output_config=config)
-    if response.stop_reason in ("refusal", "max_tokens"):
-        raise ValueError(f"Claude หยุดตอบ: {response.stop_reason}")
-    text = next((b.text for b in response.content if b.type == "text"), None)
-    if text is None:
-        raise ValueError("Claude ไม่ได้ส่งผลลัพธ์")
-    return json.loads(text)
-
-
-def _gemini(system, prompt, schema):
+def _generate(system, prompt, schema):
     """เรียก Gemini ให้ตอบเป็น JSON ตาม schema"""
     key = os.getenv("GEMINI_API_KEY", "").strip()
-    model = model_label()
-    config = {"temperature": 0, "responseMimeType": "application/json", "responseSchema": _gemini_schema(schema)}
+    model = os.getenv("GEMINI_MODEL", "").strip() or DEFAULT_MODEL
+    config = {"temperature": 0, "responseMimeType": "application/json", "responseSchema": schema}
     if "lite" in model:
         config["thinkingConfig"] = {"thinkingLevel": "minimal"}
     body = {"systemInstruction": {"parts": [{"text": system}]},
@@ -112,17 +55,8 @@ def _gemini(system, prompt, schema):
     return json.loads(data["candidates"][0]["content"]["parts"][0]["text"])
 
 
-def _gemini_schema(schema):
-    """JSON Schema -> รูปแบบ schema ของ Gemini (ชนิดตัวพิมพ์ใหญ่ ไม่มี additionalProperties)"""
-    if isinstance(schema, dict):
-        return {k: (v.upper() if k == "type" else _gemini_schema(v))
-                for k, v in schema.items() if k != "additionalProperties"}
-    return schema
-
-
 def _schema(name, item_type):
-    return {"type": "object", "properties": {name: {"type": "array", "items": {"type": item_type}}},
-            "required": [name], "additionalProperties": False}
+    return {"type": "OBJECT", "properties": {name: {"type": "ARRAY", "items": {"type": item_type}}}, "required": [name]}
 
 
 ROUTE_SYSTEM = """You map a student's question to sections of a Thai textbook on database systems and SQL.
@@ -206,8 +140,7 @@ def _is_heading_only(u):
 
 def route(query):
     """เลขหัวข้อที่ AI เลือก (ตรวจแล้วว่ามีจริง) — [] = AI บอกว่าตำราไม่มีเรื่องนี้"""
-    got = _generate(ROUTE_SYSTEM, f"คำถาม: {query}", _schema("sections", "integer"),
-                    static=f"หัวข้อในตำรา:\n{_catalog()}")
+    got = _generate(ROUTE_SYSTEM, f"คำถาม: {query}\n\nหัวข้อในตำรา:\n{_catalog()}", _schema("sections", "INTEGER"))
     ids = [i for i in got.get("sections", []) if isinstance(i, int) and 0 <= i < len(kb.ENTRIES)]
     return list(dict.fromkeys(ids))[:MAX_SECTIONS]
 
@@ -218,7 +151,7 @@ def focus(query, ids):
     for i in ids:
         us = kb.units(kb.ENTRIES[i])
         blocks.append(f"## {kb.ENTRIES[i]['topic']}\n" + "\n".join(f"[{i}.{k}] {_preview(u)}" for k, u in enumerate(us)))
-    got = _generate(FOCUS_SYSTEM, f"คำถาม: {query}\n\n" + "\n\n".join(blocks), _schema("paragraphs", "string"))
+    got = _generate(FOCUS_SYSTEM, f"คำถาม: {query}\n\n" + "\n\n".join(blocks), _schema("paragraphs", "STRING"))
     picked = {}
     for label in got.get("paragraphs", []):
         m = re.fullmatch(r"\[?(\d+)\.(\d+)\]?", str(label).strip())
@@ -227,16 +160,13 @@ def focus(query, ids):
     return {i: sorted(ks) for i, ks in picked.items()}
 
 
-_ERRORS = (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) + (
-    (anthropic.APIError,) if anthropic is not None else ())
+_ERRORS = (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError)
 
 
 def _log(exc):
     detail = ""
     if isinstance(exc, urllib.error.HTTPError):
         detail = exc.read().decode("utf-8", "replace")[:200]
-    elif anthropic is not None and isinstance(exc, anthropic.RateLimitError):
-        detail = "(เกินอัตราที่บัญชีใช้ได้ต่อนาที)"
     print(f"[!] ใช้ AI เลือกหัวข้อไม่สำเร็จ ใช้วิธีค้นแบบเดิมแทน: {type(exc).__name__}: {exc} {detail}")
 
 

@@ -8,7 +8,6 @@ import unittest
 import urllib.error
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import knowledge_base as kb
@@ -42,7 +41,7 @@ class FakeGemini:
     def __init__(self, sections=(), paragraphs=(), error=None):
         self.sections, self.paragraphs, self.error, self.calls = list(sections), list(paragraphs), error, []
 
-    def __call__(self, system, prompt, schema, static=""):
+    def __call__(self, system, prompt, schema):
         self.calls.append((system, prompt))
         if self.error:
             raise self.error
@@ -113,7 +112,7 @@ class FocusedAnswers(unittest.TestCase):
 
 class AiSelector(unittest.TestCase):
     def setUp(self):
-        env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key', 'ANTHROPIC_API_KEY': '', 'AI_PROVIDER': ''})
+        env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key'})
         env.start()
         self.addCleanup(env.stop)
 
@@ -235,12 +234,12 @@ class AiSelector(unittest.TestCase):
 
 
 class ChangingAI:
-    """AI ที่ตอบไม่เหมือนเดิมทุกครั้ง (แบบที่ Gemini/Claude ทำจริง): แต่ละครั้งเลือกหัวข้อถัดไปในรายการ"""
+    """AI ที่ตอบไม่เหมือนเดิมทุกครั้ง (แบบที่ AI ทำจริง): แต่ละครั้งเลือกหัวข้อถัดไปในรายการ"""
     def __init__(self, *prefixes, error_first=False):
         self.sections = [topic_index(p) for p in prefixes]
         self.error_first, self.calls, self.routes = error_first, [], 0
 
-    def __call__(self, system, prompt, schema, static=""):
+    def __call__(self, system, prompt, schema):
         self.calls.append(system)
         if self.error_first and len(self.calls) == 1:
             raise urllib.error.URLError('network down')
@@ -255,7 +254,7 @@ class SameAnswerEveryTime(unittest.TestCase):
     Q = 'ชนิดข้อมูลใน SQL มีอะไรบ้าง'
 
     def setUp(self):
-        env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key', 'ANTHROPIC_API_KEY': '', 'AI_PROVIDER': ''})
+        env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key'})
         env.start()
         self.addCleanup(env.stop)
 
@@ -341,65 +340,6 @@ class SameAnswerEveryTime(unittest.TestCase):
                      ('ชนิดข้อมูลใน SQL', 'ชนิดข้อมูล ใน sql นะคะ')]:
             self.assertEqual(kb.question_key(a), kb.question_key(b))
         self.assertEqual(kb.question_key('คะแนนสอบ'), 'คะแนนสอบ')   # "คะ" ในคำไม่ถูกตัด
-
-
-class FakeClaude:
-    """แทน anthropic.Anthropic: จำคำขอที่ส่งไป และตอบตามที่กำหนด"""
-    requests, reply, stop = [], '{"sections": []}', 'end_turn'
-
-    def __init__(self, **kwargs):
-        self.options = kwargs
-        self.messages = self
-
-    def create(self, **kwargs):
-        FakeClaude.requests.append(kwargs)
-        return SimpleNamespace(stop_reason=FakeClaude.stop, content=[
-            SimpleNamespace(type='thinking', thinking=''), SimpleNamespace(type='text', text=FakeClaude.reply)])
-
-
-class ClaudeRequest(unittest.TestCase):
-    def setUp(self):
-        env = patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'sk-test', 'GEMINI_API_KEY': 'g-test',
-                                      'ANTHROPIC_MODEL': '', 'AI_PROVIDER': ''})
-        env.start()
-        self.addCleanup(env.stop)
-        client = patch.object(ai_select.anthropic, 'Anthropic', FakeClaude)
-        client.start()
-        self.addCleanup(client.stop)
-        ai_select._CLIENT.clear()
-        FakeClaude.requests, FakeClaude.stop = [], 'end_turn'
-
-    def test_claude_is_used_when_its_key_is_set(self):
-        self.assertEqual((ai_select.provider(), ai_select.model_label()), ('anthropic', 'claude-sonnet-5'))
-        with patch.dict(os.environ, {'AI_PROVIDER': 'gemini'}):
-            self.assertEqual(ai_select.provider(), 'gemini')
-
-    def test_route_request(self):
-        i = topic_index('8.2 ')
-        FakeClaude.reply = json.dumps({'sections': [i, 9999]})
-        self.assertEqual(ai_select.route('ชนิดข้อมูลใน SQL มีอะไรบ้าง'), [i])
-        req = FakeClaude.requests[0]
-        self.assertEqual(req['model'], 'claude-sonnet-5')
-        self.assertEqual(req['messages'], [{'role': 'user', 'content': 'คำถาม: ชนิดข้อมูลใน SQL มีอะไรบ้าง'}])
-        fmt = req['output_config']['format']
-        self.assertEqual(fmt['type'], 'json_schema')
-        self.assertFalse(fmt['schema']['additionalProperties'])
-        self.assertEqual(req['output_config']['effort'], 'low')
-        self.assertNotIn('temperature', req)                        # Sonnet 5 ไม่รับ temperature
-        # รายชื่อหัวข้อทั้งเล่มเหมือนกันทุกคำถาม: อยู่ก่อนคำถามและทำ prompt cache
-        self.assertEqual(req['system'][0]['text'], ai_select.ROUTE_SYSTEM)
-        self.assertEqual(req['system'][1]['cache_control'], {'type': 'ephemeral'})
-        self.assertTrue(req['system'][1]['text'].startswith('หัวข้อในตำรา:\n0. '))
-        with patch.dict(os.environ, {'ANTHROPIC_MODEL': 'claude-haiku-4-5'}):
-            ai_select.route('x')
-            self.assertNotIn('effort', FakeClaude.requests[-1]['output_config'])
-
-    def test_refusal_falls_back_to_search(self):
-        FakeClaude.stop = 'refusal'
-        q = 'ชนิดข้อมูลใน SQL มีอะไรบ้าง'
-        self.assertIsNone(ai_select.plan_answer(q))
-        self.assertEqual(ask(q, selector=ai_select.plan_answer), ask(q))
-        self.assertIn(ai_select.anthropic.APIError, ai_select._ERRORS)   # 429/5xx/เน็ตหลุด ก็กลับไปค้นเองเช่นกัน
 
 
 if __name__ == '__main__':

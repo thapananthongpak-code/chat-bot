@@ -10,7 +10,7 @@ from answer_memory import AnswerMemory
 class HandbookRoutes(unittest.TestCase):
     def setUp(self):
         # app โหลด API key จาก .env ได้ ปิดไว้ให้ทดสอบแบบไม่ต่อเน็ต และไม่ใช้คำตอบที่จำไว้ใน ai_answers.json
-        env = patch.dict(os.environ, {'GEMINI_API_KEY': '', 'ANTHROPIC_API_KEY': ''})
+        env = patch.dict(os.environ, {'GEMINI_API_KEY': ''})
         env.start()
         self.addCleanup(env.stop)
         memory = patch.object(application, 'answer_memory', AnswerMemory(os.devnull, writable=False))
