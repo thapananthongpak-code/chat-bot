@@ -23,6 +23,15 @@ def ask(q, selector=None, history=()):
     return kb.answer_from_dataset(list(history) + [{'role': 'user', 'content': q}], selector=selector)
 
 
+def chat(*messages):
+    """ถามต่อกันในบทสนทนาเดียว คืนคำตอบของแต่ละข้อ"""
+    history, answers = [], []
+    for m in messages:
+        answers.append(ask(m, history=history))
+        history += [{'role': 'user', 'content': m}, {'role': 'assistant', 'content': answers[-1]}]
+    return answers
+
+
 def temp_memory(test, writable=True):
     """ที่จำคำตอบชั่วคราวสำหรับทดสอบ (ไม่แตะ ai_answers.json ของจริง)"""
     fd, path = tempfile.mkstemp(suffix='.json')
@@ -58,7 +67,7 @@ class FocusedAnswers(unittest.TestCase):
                 continue
             if line.startswith('… ') or line.endswith(' …'):       # ช่วงที่ตัดมาจากกลางย่อหน้า: เนื้อในต้องอยู่ในย่อหน้าของตำราตรงตัว
                 inner = line.removeprefix('… ').removesuffix(' …')
-                self.assertGreaterEqual(len(inner), 80)
+                self.assertGreaterEqual(len(inner), 40)
                 self.assertTrue(any(inner in book_line for book_line in BOOK_LINES), inner[:60])
             else:
                 self.assertIn(line, BOOK_LINES)
@@ -139,8 +148,8 @@ class FocusedAnswers(unittest.TestCase):
         self.assertNotIn('RIGHT JOIN', body)                                  # ท่อนของ JOIN ชนิดอื่นไม่ติดมา
         self.assertTrue(body.strip().endswith(' …'))                          # บอกว่าตัดมาจากกลางย่อหน้า
         self.assertLess(len(body), 400)
-        chips = re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)             # ปุ่มอ่านหัวข้อเต็มของแต่ละฝั่ง
-        self.assertEqual([c[:5] for c in chips], ['บทสรุ', '10.5 ', '10.6 '])
+        chips = re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)             # ปุ่มขอตัวอย่าง + อ่านหัวข้อเต็มของแต่ละฝั่ง
+        self.assertEqual([c[:5] for c in chips], ['ขอตัว', 'บทสรุ', '10.5 ', '10.6 '])
         self.assertEqual(ask('innerjoin กับ left join ต่างกันยังไง'), answer)   # พิมพ์ติดกันได้คำตอบเดียวกัน
 
     def test_comparison_without_a_comparing_paragraph_shows_both_definitions(self):
@@ -153,6 +162,73 @@ class FocusedAnswers(unittest.TestCase):
         body = ev.content(kb, answer)
         self.assertNotIn('4) คีย์นอก ไม่จำเป็น', body)        # ข้อย่อยที่แค่เอ่ยถึงทั้งสองคำ ไม่ใช่การเทียบ
         self.assertNotIn('ตารางที่ 4.18', body)                # ไม่มีตารางตัวอย่างของฝั่งใดฝั่งหนึ่ง
+
+    def test_comparison_shows_only_the_opening_of_each_side(self):
+        # ผู้ใช้รายงานว่าคำตอบเปรียบเทียบยังยาว: เหลือแค่ใจความเปิดของแต่ละเรื่อง ตัดก่อน "เช่น …" และรายละเอียดต่อท้าย
+        answer = ask('คีย์หลักกับคีย์นอกต่างกันยังไง')
+        sides = [l for l in ev.content(kb, answer).split('\n') if l.strip()]
+        self.assertEqual(len(sides), 2)
+        self.assertTrue(sides[0].startswith('คีย์หลัก หมายถึง คีย์ที่มีความเป็นเอกลักษณ์'))
+        self.assertTrue(sides[1].startswith('คีย์นอก หมายถึง คีย์ที่อ้างอิงมากจากอีกตารางหนึ่ง'))
+        for side in sides:
+            self.assertTrue(side.endswith(' …'))                 # บอกว่าย่อหน้ายังมีต่อ
+            self.assertLessEqual(len(side), kb.COMPARE_SIDE_MAX + kb.COMPARE_SLACK + 2)
+            self.assertNotIn('เช่น', side)
+        self.assertNotIn('ตารางแผนกและตารางพนักงาน', answer)    # ตัวอย่างของคีย์นอกไม่ติดมา
+        self.assertVerbatim(answer)
+        # ตัดได้เฉพาะรอยต่อประโยค: ท่อนที่แสดงจบก่อนคำเชื่อม/ตัวอย่างในย่อหน้าของตำราพอดี
+        line = next(l for l in BOOK_LINES if l.startswith('คีย์นอก หมายถึง'))
+        self.assertTrue(line[len(sides[1]) - 2:].lstrip().startswith('เช่น'))
+        chips = re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)
+        self.assertEqual(chips[0], kb.EXAMPLE_CHIP)                # ตัวอย่างไม่แสดงมาเอง ผู้ใช้ขอเองได้
+        self.assertEqual([c[:21] for c in chips[1:]], ['4.5 ประเภทของคีย์ · 3', '4.5 ประเภทของคีย์ · 4'])
+        # ย่อหน้าสั้นที่ไม่มีตัวอย่างแสดงทั้งย่อหน้า ไม่มี …
+        self.assertNotIn(' …', ev.content(kb, ask('สกีมากับอินสแตนซ์ต่างกันยังไง')))
+
+    def test_examples_are_given_when_asked_after_a_comparison(self):
+        # กดปุ่ม/พิมพ์ "ขอตัวอย่าง" ต่อจากคำตอบเปรียบเทียบ: ได้ตัวอย่างที่ตัดออกไปของเรื่องนั้นก่อน ไม่แสดงต้นย่อหน้าซ้ำ
+        first, examples = chat('คีย์หลักกับคีย์นอกต่างกันยังไง', kb.EXAMPLE_CHIP)
+        blocks = examples.split('\n\n---\n\n')
+        self.assertTrue(blocks[0].startswith('ตัวอย่างเพิ่มเติมเรื่อง **คีย์หลัก / คีย์นอก**'))
+        self.assertTrue(blocks[1].startswith('### จาก 4.5 ประเภทของคีย์ · 4. คีย์นอก (Foreign Key)\n\n… เช่น ตารางแผนกและตารางพนักงาน'))
+        self.assertNotIn('คีย์นอก หมายถึง', blocks[1])
+        first, examples = chat('one to one กับ one to many ต่างกันยังไง', kb.EXAMPLE_CHIP)
+        self.assertIn('… เช่น เอ็นทิตี้ “พนักงาน”', examples)
+        self.assertIn('… เช่น เอ็นทิตี้ “ประเภทสินค้า”', examples)
+        self.assertNotIn('จาก 4.', examples)                       # ไม่ลากตัวอย่างของหัวข้ออื่นมาก่อน
+        # หัวตัวอย่างมาพร้อมเนื้อตัวอย่าง ไม่ใช่บรรทัดหัวอย่างเดียว
+        first, examples = chat('1NF กับ 2NF ต่างกันยังไง', kb.EXAMPLE_CHIP)
+        self.assertIn('ตัวอย่างที่ 1 การวิเคราะห์นอมอลฟอร์มระดับที่ 2 (2NF)\nจากตารางต่อไปนี้', examples)
+        self.assertNotIn('พิจารณาได้จากตัวอย่างดังต่อไปนี้\n\nแหล่งข้อมูล', examples)   # บรรทัดเกริ่นไม่ใช่ตัวอย่าง
+        # ไม่มีตัวอย่างให้ขอ ก็ไม่มีปุ่ม
+        self.assertNotIn(kb.EXAMPLE_CHIP, ask('คีย์หลักคืออะไร'))
+
+    def test_comparison_that_cannot_be_built_stays_short(self):
+        # หาตัวนิยามได้ไม่ครบทุกฝั่ง: เดิมยกทั้งหัวข้อ 5.3 พร้อมหัวข้อย่อยทุกส่วน (9,500 ตัวอักษร)
+        answer = ask('เอนทิตีแบบอ่อนกับแบบแข็งต่างกันยังไง')
+        self.assertLess(len(ev.content(kb, answer)), 300)
+        self.assertIn('เอ็นทิตี้แบบอ่อนแอ (Weak Entities) หมายถึง', answer)
+        self.assertIn('[[ถาม:5.3 เอ็นทิตี้]]', answer)             # อ่านทั้งหัวข้อได้จากปุ่ม
+        answer = ask('union กับ join ต่างกันยังไง')                 # ตำราไม่มี UNION: ส่วนที่เจอก็ยังสั้น ไม่มีโค้ดตัวอย่าง
+        self.assertLess(len(ev.content(kb, answer)), 300)
+        self.assertNotIn('```', answer)
+        # แผนจากการตีความ (AI/คำตอบที่จำไว้) ที่เลือกมาทั้งหัวข้อ: คำตอบเปรียบเทียบก็ยังแสดงแค่ใจความเปิดของแต่ละหัวข้อ
+        parts = [e for e in kb.ENTRIES if e['topic'].startswith(('5.3 เอ็นทิตี้ · 1.', '5.3 เอ็นทิตี้ · 2.'))]
+        answer = kb.render_plan(kb._brief_plan([(parts[0], None), (parts[1], [])]))
+        self.assertEqual([l[3:21] for l in answer.split('\n') if l.startswith('## ')], ['5.3 เอ็นทิตี้ · 1.', '5.3 เอ็นทิตี้ · 2.'])
+        self.assertIn('เอ็นทิตี้แบบปกติ (Strong Entities)', answer)
+        self.assertLess(len(ev.content(kb, answer)), 600)
+        self.assertNotIn('ภาพที่ 5.4', answer)
+        self.assertVerbatim(answer)
+
+    def test_excerpts_survive_the_answer_memory(self):
+        # แผนที่มีช่วงของย่อหน้า (เลข, เริ่ม, จบ) เก็บลง ai_answers.json แล้วอ่านกลับได้คำตอบเดิม
+        plan = kb.plan_answer('คีย์หลักกับคีย์นอกต่างกันยังไง')
+        self.assertTrue(any(isinstance(k, tuple) for _, picked in plan for k in picked))
+        stored = json.loads(json.dumps(kb.plan_to_json(plan)))
+        self.assertEqual(kb.render_plan(kb.plan_from_json(stored)), kb.render_plan(plan))
+        stored[0]['picked'][0][2] = 10 ** 6                        # ช่วงเกินย่อหน้า (ตำราเปลี่ยน) ใช้ไม่ได้
+        self.assertIsNone(kb.plan_from_json(stored))
 
     def test_comparison_never_dumps_whole_sections(self):
         # เดิมยกทั้งหัวข้อ: where/having ได้ทั้ง 9.11 (1,901), count/sum ได้ทั้ง 9.10 (3,643), ข้อมูล/สารสนเทศ 2,500

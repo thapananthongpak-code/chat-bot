@@ -61,7 +61,7 @@ class Conversation(unittest.TestCase):
         got = topics(chat('LEFT JOIN', 'แล้วมันต่างจาก INNER JOIN ยังไง')[1])
         self.assertEqual([t[:5] for t in got], ['บทสรุ'])                    # ช่วงที่ตำราเทียบสองเรื่องไว้เอง
         answer = chat('LEFT JOIN', 'แล้วมันต่างจาก INNER JOIN ยังไง')[1]
-        self.assertEqual([c[:5] for c in re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)], ['บทสรุ', '10.6 ', '10.5 '])
+        self.assertEqual([c[:5] for c in re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)], ['ขอตัว', 'บทสรุ', '10.6 ', '10.5 '])
         self.assertTrue(chat('LEFT JOIN', 'มันต่างกันยังไง')[1].startswith('ต้องการเทียบ'))
 
     def test_new_question_is_not_mixed_with_old_topic(self):
