@@ -44,6 +44,31 @@ HEADING_CASES = [
     dict(q="แบบจำลองข้อมูลเชิงแนวคิด", topic="4.1 แบบจำลองข้อมูล · 1.", has=["Conceptual Data Model"]),
 ]
 
+# ชุด "ที่ผู้ใช้รายงาน": ตอบเกิน / ไม่มีภาพ / เนื้อหาซ้ำ / เปรียบเทียบแล้วยกทั้งหัวข้อ (max_chars = เนื้อหาไม่เกินเท่านี้)
+REPORTED_CASES = [
+    dict(q="ความหมายของข้อมูล", topic="1.1 ", has=["ข้อมูล (Data) หมายถึง"], max_chars=1400,
+         lacks=["ตัวอย่างข้อมูล", "cat, dog", "![ภาพที่", "สารสนเทศ (Information) หมายถึง"]),
+    dict(q="ชุดข้อมูลที่ยังไม่มีความหมาย", topic="1.1 ", max_chars=900,
+         has=["![ภาพที่ 1.1](/static/figures/fig_1_1.webp)", "ภาพที่ 1.1 ชุดข้อมูลที่ยังไม่มีความหมาย"],
+         lacks=["สารสนเทศ (Information) หมายถึง", "ภาพที่ 1.2"]),
+    dict(q="ตัวอย่างสารสนเทศ", topic="1.1 ", has=["ตัวอย่างสารสนเทศ", "![ภาพที่ 1.2]"], max_chars=1200,
+         lacks=["ภาพที่ 1.3", "ข้อมูล หมายถึงข้อมูลที่เกิดจากการรวบรวม", "ข้อมูล (Data) หมายถึง"]),
+    dict(q="ตัวอย่างข้อมูล", topic="1.1 ", has=["cat, dog", "![ภาพที่ 1.1]"],
+         lacks=["สารสนเทศ (Information) หมายถึง", "ภาพที่ 1.2"]),
+    dict(q="inner join กับ left join ต่างกันยังไง", topic=("บทสรุป บทที่ 10", "10.5 "), max_chars=2800,
+         has=["INNER JOIN จะมีลักษณะคล้ายกัน", "LEFT JOIN จะเน้นการนำเอาข้อมูลจากตารางทางซ้าย",
+              "คำสั่ง INNER JOIN เป็นคำสั่งที่ใช้ในการค้นหา", "วิธี LEFT JOIN เป็นการแสดงข้อมูลทุกแถว"],
+         lacks=["ตัวอย่างที่ 10.6", "ตัวอย่างที่ 10.11", "P6 | น้ำดื่มคริสตัล", "10001 | เครื่องดื่ม"]),
+    dict(q="innerjoin กับ left join ต่างกันยังไง", topic=("บทสรุป บทที่ 10", "10.5 "), max_chars=2800,
+         has=["INNER JOIN จะมีลักษณะคล้ายกัน", "วิธี LEFT JOIN เป็นการแสดงข้อมูลทุกแถว"],
+         lacks=["ตัวอย่างที่ 10.6", "ตัวอย่างที่ 10.11"]),
+    dict(q="ภาพที่ 1.1", topic="1.1 ", has=["![ภาพที่ 1.1]", "จากภาพที่ 1.1"], max_chars=800, lacks=["ภาพที่ 1.2"]),
+    dict(q="ภาพที่ 1.4", topic="1.3 ", has=["![ภาพที่ 1.4]"], lacks=["ภาพที่ 1.5"]),   # เลขภาพ ไม่ใช่เลขหัวข้อ 1.4
+    dict(q="ตารางที่ 4.3", topic="4.4 ", has=["ตารางที่ 4.3 ตารางสินค้า", "P0010 | สายยางรดน้ำ"],
+         lacks=["คุณสมบัติของรีเลชันที่สำคัญ", "ตารางที่ 4.4"]),
+    dict(q="ภาพที่ 99.9", topic=None),
+]
+
 # ชุด "พิมพ์เอง": คำถามแบบที่คนพิมพ์ ไม่ได้ลอกชื่อหัวข้อ
 NATURAL_CASES = [
     dict(q="สารสนเทศคืออะไร", topic="1.1 ", has=["สารสนเทศ (Information) หมายถึง"], lacks=["ข้อมูล (Data) หมายถึง", "ภาพที่ 1.3"]),
@@ -86,7 +111,7 @@ NATURAL_CASES = [
     dict(q="ลบตารางยังไง", topic="8.5 "),
     dict(q="เพิ่มข้อมูลลงตาราง", topic="8.6 "),
     dict(q="ข้อดีของฐานข้อมูล", topic="2.5 "),
-    dict(q="INNER JOIN กับ LEFT JOIN ต่างกันยังไง", topic="10.5 ", has=["INNER JOIN", "LEFT JOIN"]),
+    dict(q="INNER JOIN กับ LEFT JOIN ต่างกันยังไง", topic=("บทสรุป บทที่ 10", "10.5 "), has=["INNER JOIN", "LEFT JOIN"]),
     # ค้นจากคำในชื่อหัวข้ออย่างเดียวพลาด ต้องอาศัย AI ตีความ (ai=True: ไม่นับตอนทดสอบแบบไม่ใช้ AI)
     dict(q="ชนิดข้อมูลใน SQL มีอะไรบ้าง", topic="8.2 ", ai=True),
     dict(q="join คืออะไร", topic=("10.2 ", "บทที่ 10 ")),
@@ -95,7 +120,7 @@ NATURAL_CASES = [
 
 # ชุด "พิมพ์เองแบบถ้อยคำอื่น": ไม่มีชื่อศัพท์หรือชื่อหัวข้อในคำถามเลย ต้องตีความ (ai=True: วิธีค้นเองพลาดได้)
 PARAPHRASE_CASES = [
-    dict(q="ข้อมูลที่ผ่านการประมวลผลแล้วเรียกว่าอะไร", topic="1.1 ", has=["สารสนเทศ (Information) หมายถึง"], ai=True),
+    dict(q="ข้อมูลที่ผ่านการประมวลผลแล้วเรียกว่าอะไร", topic="1.1 ", has=["สารสนเทศ"], max_chars=1700, ai=True),
     dict(q="ทำไมต้องมีคีย์หลัก", topic="4.5 ประเภทของคีย์ · 3."),
     dict(q="อยากเรียงข้อมูลจากมากไปน้อยต้องใช้คำสั่งอะไร", topic="9.7 ", has=["ORDER BY"]),
     dict(q="หาค่าเฉลี่ยใน sql ใช้คำสั่งอะไร", topic="9.10 ", has=["AVG"], lacks=["9.10.1 ฟังก์ชัน MAX()"], ai=True),
@@ -105,7 +130,7 @@ PARAPHRASE_CASES = [
     dict(q="ข้อมูลซ้ำซ้อนทำให้เกิดปัญหาอะไร", topic=("1.6 ", "7.2 ")),
     dict(q="สถาปัตยกรรมฐานข้อมูล 3 ระดับมีอะไรบ้าง", topic="3.2 "),
     dict(q="ความสัมพันธ์แบบ one to many แปลงเป็นตารางยังไง", topic="6.6 ", ai=True),
-    dict(q="big data มีลักษณะยังไง", topic="11.1 ", has=["Volume", "Velocity", "Variety"], lacks=["บริษัท Tesco Lotus"], ai=True),
+    dict(q="big data มีลักษณะยังไง", topic="11.1 ", has=["Volume", "Velocity", "Variety"], lacks=["บริษัท Tesco Lotus"]),
     dict(q="ถ้าอยากลบข้อมูลบางแถวออกจากตาราง", topic="8.8 "),
     dict(q="แก้ราคาสินค้าในตารางใช้คำสั่งอะไร", topic="8.7 ", ai=True),
     dict(q="SQL แบ่งเป็นกี่ประเภท", topic="8.1 ", has=["DDL", "DML", "DCL"]),
@@ -127,6 +152,12 @@ def toc_cases(kb):
             for e, name in zip(kb.ENTRIES, names) if names.count(name) == 1 and not kb._is_meta(e["topic"])]
 
 
+def content(kb, answer):
+    """เนื้อหาจากตำราในคำตอบ: ไม่นับชื่อหัวข้อ ที่มา หมายเหตุ และปุ่ม (รูปนับ)"""
+    drop = re.compile(r"^(## .*|แหล่งข้อมูล:.*|\[\[ถาม:.*|" + re.escape(kb.PARTIAL_NOTE) + r"|---)$", re.M)
+    return drop.sub("", answer)
+
+
 def check(kb, case, answer):
     """คืนรายการปัญหาของคำตอบ ([] = ผ่าน)"""
     topics = [line[3:] for line in answer.split("\n") if line.startswith("## ")]
@@ -138,8 +169,11 @@ def check(kb, case, answer):
         problems.append(f"หัวข้อผิด: ได้ {topics[:2] or answer[:40]!r}")
     if case.get("only") and any(not t.startswith(want) for t in topics):
         problems.append(f"มีหัวข้ออื่นปน: {[t for t in topics if not t.startswith(want)]}")
+    body = content(kb, answer)
     problems += [f"ไม่มี {p!r}" for p in case.get("has", []) if p not in answer]
-    problems += [f"เกินคำถาม: มี {p!r}" for p in case.get("lacks", []) if p in answer]
+    problems += [f"เกินคำถาม: มี {p!r}" for p in case.get("lacks", []) if p in body]
+    if case.get("max_chars") and len(body) > case["max_chars"]:
+        problems.append(f"ยาวเกินคำถาม: {len(body)} ตัวอักษร (ไม่ควรเกิน {case['max_chars']})")
     return problems
 
 
@@ -188,7 +222,7 @@ def main():
         return kb.answer_from_dataset([{"role": "user", "content": q}], selector=selector, memory=mem)
 
     groups = [("หัวข้อตามสารบัญ", toc_cases(kb)), ("หัวเรื่องย่อยในเนื้อหา", HEADING_CASES),
-              ("พิมพ์เอง", NATURAL_CASES), ("พิมพ์เองแบบถ้อยคำอื่น", PARAPHRASE_CASES), ("นอกตำรา", OUTSIDE_CASES)]
+              ("ที่ผู้ใช้รายงาน", REPORTED_CASES), ("พิมพ์เอง", NATURAL_CASES), ("พิมพ์เองแบบถ้อยคำอื่น", PARAPHRASE_CASES), ("นอกตำรา", OUTSIDE_CASES)]
     total_fail = 0
     for name, cases in groups:
         fails = need_ai = 0

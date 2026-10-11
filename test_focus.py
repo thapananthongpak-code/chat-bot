@@ -59,7 +59,8 @@ class FocusedAnswers(unittest.TestCase):
 
     def test_question_sets(self):
         # หัวข้อตามสารบัญทุกหัวข้อ, หัวเรื่องย่อยในเนื้อหา, คำถามแบบพิมพ์เอง, คำถามนอกตำรา (ไม่นับข้อที่ต้องใช้ AI)
-        for case in ev.toc_cases(kb) + ev.HEADING_CASES + ev.NATURAL_CASES + ev.PARAPHRASE_CASES + ev.OUTSIDE_CASES:
+        for case in (ev.toc_cases(kb) + ev.HEADING_CASES + ev.REPORTED_CASES + ev.NATURAL_CASES
+                     + ev.PARAPHRASE_CASES + ev.OUTSIDE_CASES):
             if case.get('ai'):
                 continue
             with self.subTest(q=case['q']):
@@ -68,15 +69,75 @@ class FocusedAnswers(unittest.TestCase):
                 if answer != kb.NO_DATA:
                     self.assertVerbatim(answer)
 
-    def test_meaning_of_one_term_is_not_the_whole_topic(self):
-        # ภาพหน้าจอจากผู้ใช้: "สารสนเทศคืออะไร" เคยได้ทั้งหัวข้อ 1.1 (รวมความหมายของข้อมูลและรูป 1.3)
-        answer = ask('สารสนเทศคืออะไร')
-        whole = next(e for e in kb.ENTRIES if e['topic'].startswith('1.1 '))
-        self.assertIn('สารสนเทศ (Information) หมายถึง', answer)
-        self.assertIn('ตัวอย่างสารสนเทศ', answer)
-        self.assertIn('![ภาพที่ 1.2](/static/figures/fig_1_2.webp)', answer)   # รูปประกอบของส่วนนี้ยังอยู่
-        self.assertNotIn('ข้อมูล (Data) หมายถึง', answer)
-        self.assertLess(len(answer), len(whole['description']) * 0.5)
+    def test_meaning_is_only_the_definition(self):
+        # ถามความหมาย ได้เฉพาะย่อหน้านิยาม ไม่แนบตัวอย่าง/รูป/ย่อหน้าของเรื่องอื่น (ตัวอย่างอยู่ที่ปุ่มต่อ)
+        for q, own, other in [('สารสนเทศคืออะไร', 'สารสนเทศ (Information) หมายถึง', 'ข้อมูล (Data) หมายถึง'),
+                              ('ความหมายของข้อมูล', 'ข้อมูล (Data) หมายถึง', 'สารสนเทศ (Information) หมายถึง')]:
+            with self.subTest(q=q):
+                answer = ask(q)
+                self.assertIn(own, answer)
+                self.assertNotIn(other, answer)
+                self.assertNotIn('![ภาพที่', answer)
+                self.assertLess(len(answer), 1500)
+        chips = re.findall(r'^\[\[ถาม:(.+)\]\]$', ask('สารสนเทศคืออะไร'), re.M)
+        self.assertEqual(chips[0], 'ตัวอย่างสารสนเทศ')                        # ปุ่มต่อ: ตัวอย่างของเรื่องนี้
+        self.assertTrue(chips[-1].startswith('1.1 '))                        # ปุ่มสุดท้าย: อ่านทั้งหัวข้อ
+
+    def test_example_button_gives_that_example_not_other_topics(self):
+        # กดปุ่ม "ตัวอย่างสารสนเทศ" หลังคำตอบความหมาย ต้องได้ส่วนตัวอย่างสารสนเทศ (+รูป 1.2) ไม่ใช่ "ตัวอย่างเพิ่มเติมจากหัวข้ออื่น"
+        history = [{'role': 'user', 'content': 'สารสนเทศคืออะไร'}, {'role': 'assistant', 'content': ask('สารสนเทศคืออะไร')}]
+        answer = ask('ตัวอย่างสารสนเทศ', history=history)
+        self.assertNotIn('ตัวอย่างเพิ่มเติม', answer)
+        self.assertIn('![ภาพที่ 1.2](/static/figures/fig_1_2.webp)', answer)
+        body = ev.content(kb, answer)
+        self.assertNotIn('![ภาพที่ 1.3]', body)                              # จบที่คำอธิบายรูป 1.2 (รูป 1.3 อยู่ที่ปุ่ม)
+        self.assertNotIn('ข้อมูล หมายถึงข้อมูลที่เกิดจากการรวบรวม', body)      # ไม่ลากไปถึงย่อหน้าสรุปทั้งหัวข้อ
+        # ปุ่มรูป: "ภาพที่ 1.3 …" ที่ตามมา ถามได้ตรงตัว
+        nxt = re.findall(r'^\[\[ถาม:(ภาพที่ 1\.3.*)\]\]$', answer, re.M)
+        self.assertEqual(len(nxt), 1)
+        self.assertIn('![ภาพที่ 1.3]', ask(nxt[0], history=history))
+
+    def test_figures_and_tables_by_number_or_name(self):
+        by_name = ask('ชุดข้อมูลที่ยังไม่มีความหมาย')       # "ความหมาย" อยู่ในชื่อภาพ ไม่ใช่คำถามว่าความหมาย
+        self.assertIn('![ภาพที่ 1.1](/static/figures/fig_1_1.webp)', by_name)
+        self.assertNotIn('สารสนเทศ (Information) หมายถึง', by_name)
+        self.assertEqual(by_name, ask('ภาพที่ 1.1'))
+        self.assertEqual(ask('รูปที่ 1.1'), ask('ภาพที่ 1.1'))
+        fig = ask('ภาพที่ 1.4')                              # เลขภาพ 1.4 อยู่ในหัวข้อ 1.3 ไม่ใช่หัวข้อ 1.4
+        self.assertTrue(fig.startswith('## 1.3 '))
+        table = ask('ตารางที่ 4.3')
+        self.assertIn('P0010 | สายยางรดน้ำ', table)
+        self.assertNotIn('คุณสมบัติของรีเลชันที่สำคัญ', table)
+        self.assertEqual(ask('ภาพที่ 99.9'), kb.NO_DATA)
+
+    def test_politeness_words_are_not_cut_from_the_middle_of_words(self):
+        # "จ้า/คะ/นะ" ตัดเฉพาะท้ายคำ: "เจ้าของ" "คะแนน" ต้องอยู่ครบ (เคยได้ "ความเป็นเ ของ" แล้วตอบหัวข้อผิด)
+        self.assertEqual(kb._asked_terms('ความเป็นเจ้าของคืออะไรครับ'), ['ความเป็นเจ้าของ'])
+        self.assertEqual(kb._asked_terms('คะแนนสอบคืออะไรนะคะ'), ['คะแนนสอบ'])
+        self.assertTrue(ask('ความเป็นเจ้าของคืออะไร').startswith('## 12.1 '))
+
+    def test_how_does_it_look_asks_for_the_definition(self):
+        answer = ask('big data มีลักษณะยังไง')
+        for v in ('Volume', 'Velocity', 'Variety'):
+            self.assertIn(v, answer)
+        self.assertNotIn('Tesco Lotus', answer)                       # ไม่ลากไปถึงกรณีศึกษาของหัวข้อ
+
+    def test_comparison_shows_what_the_book_compares(self):
+        answer = ask('inner join กับ left join ต่างกันยังไง')
+        heads = [l[3:] for l in answer.split('\n') if l.startswith('## ')]
+        self.assertTrue(heads[0].startswith('บทสรุป บทที่ 10'))               # ย่อหน้าที่ตำราเทียบไว้เองมาก่อน
+        self.assertEqual([h[:5] for h in heads[1:]], ['10.5 ', '10.6 '])
+        self.assertIn('INNER JOIN จะมีลักษณะคล้ายกัน', answer)
+        self.assertNotIn('ตัวอย่างที่ 10.6', answer)                          # ไม่ยกตัวอย่างของทั้งสองหัวข้อมาต่อกัน
+        self.assertLess(len(answer), 3000)
+        for t in heads[1:]:                                                   # ปุ่มอ่านหัวข้อเต็มของแต่ละฝั่ง
+            self.assertIn(f'[[ถาม:{t}]]', answer)
+        self.assertEqual(ask('innerjoin กับ left join ต่างกันยังไง'), answer)   # พิมพ์ติดกันได้คำตอบเดียวกัน
+        # ไม่มีย่อหน้าที่ตำราเทียบไว้ (คีย์หลัก/คีย์นอก): แสดงนิยามของสองฝั่งคู่กัน ไม่เดาความต่างเอง
+        heads = [l[3:] for l in ask('คีย์หลักกับคีย์นอกต่างกันยังไง').split('\n') if l.startswith('## ')]
+        self.assertEqual(len(heads), 2)
+        self.assertTrue(heads[0].startswith('4.5 ประเภทของคีย์ · 3. คีย์หลัก'))
+        self.assertTrue(heads[1].startswith('4.5 ประเภทของคีย์ · 4. คีย์นอก'))
 
     def test_partial_answer_offers_the_whole_topic(self):
         answer = ask('ทูเพิลคืออะไร')
