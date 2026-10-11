@@ -771,17 +771,20 @@ def _definition_span(entry, start):
     return picked
 
 
-def definition_block(entry, start):
+def definition_block(entry, start, extras=True):
     """เฉพาะตัวนิยามของศัพท์ที่นิยามไว้ที่ย่อหน้า start: หัวเรื่องศัพท์ (ถ้ามี) + ย่อหน้านิยาม
     + รายการข้อย่อยที่นิยามเกริ่นไว้ ("ได้แก่/ดังนี้" เช่น ลักษณะของ Big Data 3 ข้อ) + โค้ดไวยากรณ์ที่ตามติดมา
     ตัวอย่าง รูป และตารางที่ตามมาไม่รวม ผู้ใช้กดปุ่มต่อได้ (ถามแค่ความหมายต้องไม่ได้ของเกินจากที่ถาม)"""
     us = units(entry)
     span = _definition_span(entry, start)
     core = [k for k in span if k <= start] or [start]
-    if not _defined_terms(us[start])[1]:       # หัวเรื่องศัพท์เฉย ๆ ("1. ภาษาสำหรับนิยามข้อมูล (DDL)") ต้องมีย่อหน้าเนื้อหาตามมา
+    names, full = _defined_terms(us[start])
+    if names and not full:                     # หัวเรื่องศัพท์เฉย ๆ ("1. ภาษาสำหรับนิยามข้อมูล (DDL)") ต้องมีย่อหน้าเนื้อหาตามมา
         body = next((k for k in span if k > start and us[k].strip()), None)
         if body is not None:
             core.append(body)
+    if not extras:                             # คำตอบเปรียบเทียบ: ย่อหน้านิยามอย่างเดียวพอ
+        return sorted(set(core))
     if _INTRO_END.search(us[max(core)].strip()):
         for k in (k for k in span if k > max(core)):
             u = us[k].strip()
@@ -1169,7 +1172,8 @@ def _direct_plan(query):
 # ---------------------------------------------------------------- ถามเปรียบเทียบ ("X กับ Y ต่างกันยังไง")
 # บอทสรุปความต่างเองไม่ได้ (ห้ามแต่งคำ) จึงแสดง 1) ย่อหน้าที่ตำราเทียบเรื่องทั้งสองไว้เอง (ถ้ามี) 2) ตัวนิยามของแต่ละเรื่อง
 # 3) ปุ่มอ่านหัวข้อเต็ม ไม่ใช่ยกทั้งสองหัวข้อมาต่อกัน
-_CONTRAST_RE = re.compile(r"ส่วน(?!ประกอบ|ใหญ่|ตัว|ที่|หนึ่ง|ใด|สูง|น้อย|ของ|หลัก|ย่อย)|ต่างจาก|แตกต่าง|ต่างกัน|ในขณะที่"
+_CONTRAST_RE = re.compile(r"(?<!บาง)(?<!แต่ละ)(?<!ทุก)(?<!หลาย)(?<!สัด)(?<!อัตรา)(?<!เป็น)"
+                          r"ส่วน(?!ประกอบ|ใหญ่|ตัว|ที่|หนึ่ง|ใด|สูง|น้อย|ของ|หลัก|ย่อย)|ต่างจาก|แตกต่าง|ต่างกัน|ในขณะที่"
                           r"|คล้ายกัน|เหมือนกัน|เปรียบเทียบ|ตรงข้าม")
 
 
@@ -1188,20 +1192,66 @@ def _merge_plan(plan):
     return list(merged.values())
 
 
+LINK = "link"             # รายการในแผนที่ไม่แสดงเนื้อหา มีแต่ปุ่มไปอ่านหัวข้อนั้น
+COMPARE_PARA_MAX = 700    # ย่อหน้าเทียบยาวกว่านี้ ใช้นิยามสองฝั่งแทนถ้าสั้นกว่า
+_CLAUSE_START = re.compile(r"(?:\s+(?=ส่วน(?!ประกอบ|ใหญ่|ตัว|ที่|หนึ่ง|ใด|สูง|น้อย|ของ|หลัก|ย่อย)|และสุดท้าย|ทั้งนี้)"
+                           r"|(?:\s+|(?<=[฀-๿]))(?=ข้อสังเกต|นอกจากนี้|ดังนั้น|อย่างไรก็ตาม))")
+
+
 def _side_core(term, entries):
-    """ตัวนิยามของเรื่องหนึ่งฝั่ง: ประโยค "X หมายถึง" ในตำรา หรือย่อหน้าเปิดของหัวข้อที่ชื่อมีศัพท์นั้น"""
+    """ย่อหน้าที่บอกว่าเรื่องฝั่งนี้คืออะไร (ย่อหน้าเดียว ไม่รวมตัวอย่าง/รายการ): ประโยค "X หมายถึง" ในตำรา,
+    ย่อหน้าเปิดของหัวข้อที่ชื่อมีศัพท์นั้น หรือหัวเรื่องระดับที่สามของหัวข้อที่ค้นเจอ ("9.10.3 ฟังก์ชัน COUNT()" + ไวยากรณ์)"""
     found = find_definition(term, prefer=entries)
     if found and not (_is_meta(found[0]["topic"]) and any(not _is_meta(x["topic"]) for x in entries)):
         e, k, _ = found
-        return e, _only_definition(e, definition_block(e, k))
+        return e, definition_block(e, k, extras=False)
     key = _term_key(term)
-    e = next((x for x in entries if len(key) >= 4 and key in _term_key(x["topic"]) and not _is_meta(x["topic"])), None)
-    return (e, _only_definition(e, _lead_block(e))) if e is not None else None
+    e = next((x for x in list(entries) + search(term, limit=2)
+              if len(key) >= 4 and key in _term_key(x["topic"]) and not _is_meta(x["topic"])), None)
+    if e is not None:
+        return e, _lead_block(e)[:1]
+    for e in entries:
+        us = units(e)
+        heads = [k for k, u in enumerate(us) if _SUBNUM.match(u.strip()) and key in _term_key(u)]
+        if len(key) >= 3 and len(heads) == 1:
+            block = subheading_block(e, heads[0])
+            cut = next((n for n, k in enumerate(block) if n and us[k].strip().startswith("ตัวอย่าง")), len(block))
+            return e, block[:cut]
+    return None
+
+
+def _near(key_text, sides, limit=160):
+    """ทุกฝั่งถูกเอ่ยถึงใกล้กันในย่อหน้านี้ไหม (ย่อหน้าที่เอ่ยถึงสองเรื่องห่างกันคนละท่อนไม่ใช่การเทียบ)"""
+    spots = [[m.start() for a in alts for m in re.finditer(re.escape(a), key_text)] for alts in sides]
+    if not all(spots):
+        return False
+    return any(all(min(abs(a - b) for b in other) <= limit for other in spots[1:]) for a in spots[0])
+
+
+def _excerpt(u, sides):
+    """ช่วง (เริ่ม, จบ) ของย่อหน้าที่พูดถึงเรื่องที่เทียบ ตัดที่รอยต่อประโยคเท่านั้น ("ส่วน…" "และสุดท้าย…" "ข้อสังเกต…")
+    เช่นบทสรุปบทที่ 10 พูดถึง JOIN ทุกชนิด ถาม INNER กับ LEFT ได้ถึงท่อน LEFT JOIN ไม่รวม RIGHT/FULL OUTER
+    None = ใช้ทั้งย่อหน้า (ศัพท์กว้างที่ถูกเอ่ยถึงหลายครั้ง, หาตำแหน่งไม่ได้ หรือตัดแล้วไม่สั้นลงชัดเจน)"""
+    low, firsts = u.lower(), []
+    for alts in sides:
+        hits = sorted((m.start(), m.end()) for a in alts if a
+                      for m in re.finditer(r"\s*".join(re.escape(c) for c in a), low))
+        if not hits or len(hits) > 3:
+            return None
+        firsts.append(hits[0])
+    lo, hi = min(a for a, _ in firsts), max(b for _, b in firsts)
+    starts = sorted({0} | {m.end() for m in _CLAUSE_START.finditer(u)})
+    begin = max(b for b in starts if b <= lo)
+    end = min([b for b in starts if b > hi] + [len(u)])
+    if len(u[begin:end].strip()) < 80 or end - begin > 0.7 * len(u):
+        return None
+    return begin, end
 
 
 def _compare_plan(sides, cores, entries):
     """sides: ฝั่งละรายการคำ (รูปมาตรฐาน) ที่ย่อหน้าต้องมีอย่างน้อยหนึ่งคำ, cores: [(หัวข้อ, ย่อหน้า) หรือ None] ต่อฝั่ง
-    คืนแผน [] ถ้าไม่มีทั้งย่อหน้าเทียบและนิยามอย่างน้อยสองฝั่ง"""
+    แสดงอย่างใดอย่างหนึ่ง ไม่ซ้อนกัน: ย่อหน้าที่ตำราเทียบสองเรื่องไว้เอง (ตัดเหลือช่วงที่เกี่ยว) หรือย่อหน้านิยามของแต่ละฝั่ง
+    คืน [] ถ้าไม่มีทั้งสองแบบ"""
     cands = {c[0]["topic"]: c[0] for c in cores if c}
     cands.update({e["topic"]: e for e in entries})
     for e in list(cands.values()):             # บทสรุปของบทที่เกี่ยวข้องมักเป็นที่ที่ตำราเทียบเรื่องต่าง ๆ ไว้
@@ -1214,17 +1264,30 @@ def _compare_plan(sides, cores, entries):
         if e["topic"] not in cands or e["topic"].startswith("แบบฝึกหัด"):
             continue
         for k, u in enumerate(units(e)):
-            if len(u) < 60 or " | " in u or u.startswith("```") or not _CONTRAST_RE.search(u):
+            if len(u) < 60 or " | " in u or u.startswith("```") or not _near(_term_key(u), sides):
                 continue
-            uk = _term_key(u)
-            if all(any(a in uk for a in alts) for alts in sides):
-                paras.append((_is_meta(e["topic"]), order, k, e))
-    paras.sort(key=lambda p: p[:3])
-    plan = [(paras[0][3], [paras[0][2]])] if paras else []
-    plan += [c for c in cores if c]
-    if not paras and len([c for c in cores if c]) < 2:
-        return []
-    return _merge_plan(plan)
+            # เทียบจริง = มีคำเปรียบเทียบ (ส่วน/คล้ายกัน/แตกต่าง…), เนื้อหาก่อนบทสรุป, ตามลำดับในเล่ม
+            paras.append((not _CONTRAST_RE.search(u), _is_meta(e["topic"]), order, k, e))
+    paras.sort(key=lambda p: p[:4])
+    both = _merge_plan([c for c in cores if c]) if all(cores) else []
+    both_size = sum(len(units(e)[k]) for e, picked in both for k in (picked or range(len(units(e)))))
+
+    def paragraph(p):
+        k, e = p[3], p[4]
+        cut = _excerpt(units(e)[k], sides)
+        links = [(c[0], LINK) for c in cores if c and c[0]["topic"] != e["topic"]]
+        return [(e, [(k,) + cut if cut else k])] + links, (cut[1] - cut[0] if cut else len(units(e)[k]))
+
+    own = {(e["topic"], k) for e, picked in both for k in picked or []}
+    explicit = [p for p in paras if not p[0] and (p[4]["topic"], p[3]) not in own]
+    if explicit:                               # 1) ตำราเทียบสองเรื่องไว้เอง: ใช้ ถ้าไม่ยาวกว่านิยามสองฝั่ง
+        plan, size = paragraph(explicit[0])
+        if size <= COMPARE_PARA_MAX or not both or size <= both_size:
+            return plan
+    if both:                                   # 2) นิยามของแต่ละฝั่งวางคู่กัน
+        return both
+    # 3) หานิยามไม่ครบ: ย่อหน้าที่เอ่ยถึงทั้งสองเรื่องใกล้กัน ("HAVING … เนื่องจากไม่สามารถใช้ WHERE กับ…") ดีกว่ายกทั้งหัวข้อ
+    return paragraph(paras[0])[0] if paras else []
 
 
 def _compare_terms_plan(terms, entries):
@@ -1233,11 +1296,10 @@ def _compare_terms_plan(terms, entries):
 
 
 def _entry_core(entry):
-    us = units(entry)
     hits = sorted(k for hs in definitions().values() for x, k, full in hs if x["topic"] == entry["topic"] and full)
     if hits and hits[0] < 3:
-        return entry, _only_definition(entry, definition_block(entry, hits[0]))
-    return entry, _only_definition(entry, _lead_block(entry))
+        return entry, definition_block(entry, hits[0], extras=False)
+    return entry, _lead_block(entry)[:1]
 
 
 def _compare_entries_plan(pair):
@@ -1286,8 +1348,18 @@ def render_plan(plan):
     [] = ทั้งหัวข้อเฉพาะส่วนนี้ (ไม่รวมหัวข้อย่อย), [เลข...] = เฉพาะย่อหน้าเหล่านั้น ตามลำดับในเล่ม
     คำตอบที่แสดงบางส่วนมีหมายเหตุกับปุ่มต่อ (ตัวอย่าง/ภาพที่ตามมา และทั้งหัวข้อ) ท้ายคำตอบครั้งเดียว"""
     blocks, chips, follow, partials = [], [], [], 0
+    links = [entry["topic"] for entry, picked in plan if picked == LINK]
+    plan = [(entry, picked) for entry, picked in plan if picked != LINK]
     whole = {entry["topic"] for entry, picked in plan if picked is None}
     shown = set()
+
+    def piece(us, k):
+        """ย่อหน้าเต็ม หรือช่วงของย่อหน้า (มี … บอกว่าตัดมาจากกลางย่อหน้า ข้อความในช่วงยังตรงตัวตามตำรา)"""
+        if not isinstance(k, tuple):
+            return us[k]
+        u = us[k[0]]
+        return ("… " if k[1] > 0 else "") + u[k[1]:k[2]].strip() + (" …" if k[2] < len(u) else "")
+
     for entry, picked in plan:
         main = entry["topic"].split(" · ")[0]
         if entry["topic"] in shown or (main != entry["topic"] and main in whole):
@@ -1296,20 +1368,22 @@ def render_plan(plan):
         parts = section_parts(entry) if picked is None else [entry]
         for e in parts:
             us = units(e)
-            partial = bool(picked) and len(set(picked)) < len(us)
-            text = "\n".join(us[k] for k in sorted(set(picked))) if partial else e["description"]
+            cut = bool(picked) and any(isinstance(k, tuple) for k in picked)
+            partial = cut or (bool(picked) and len(set(picked)) < len(us))
+            order = sorted(set(picked), key=lambda k: k[0] if isinstance(k, tuple) else k) if partial else []
+            text = "\n".join(piece(us, k) for k in order) if partial else e["description"]
             # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
             block = ["## " + e["topic"], with_figures(text), _source_line(e)]
             if partial:
                 partials += 1
-                follow += _followup_chips(e, picked)
+                follow += [] if cut else _followup_chips(e, picked)
                 chips.append(e["topic"])
             elif picked is not None and len(section_parts(e)) > 1:
                 chips.append(e["topic"])       # หัวข้อย่อยที่ไม่ได้แสดง อ่านต่อได้จากหัวข้อหลัก
             blocks.append("\n\n".join(block))
     out = "\n\n---\n\n".join(blocks)
     # ปุ่มตัวอย่าง/ภาพที่ตามมาใช้เฉพาะคำตอบที่มีส่วนเดียว (คำตอบเปรียบเทียบหลายส่วนไม่ควรมีปุ่มของส่วนใดส่วนหนึ่ง)
-    chips = list(dict.fromkeys((follow if partials == 1 else []) + chips))
+    chips = list(dict.fromkeys((follow if partials == 1 else []) + chips + links))
     if chips:
         out += "\n\n" + PARTIAL_NOTE + "\n" + "\n".join(f"[[ถาม:{t}]]" for t in chips)
     return out

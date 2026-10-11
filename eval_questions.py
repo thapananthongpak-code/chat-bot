@@ -55,13 +55,11 @@ REPORTED_CASES = [
          lacks=["ภาพที่ 1.3", "ข้อมูล หมายถึงข้อมูลที่เกิดจากการรวบรวม", "ข้อมูล (Data) หมายถึง"]),
     dict(q="ตัวอย่างข้อมูล", topic="1.1 ", has=["cat, dog", "![ภาพที่ 1.1]"],
          lacks=["สารสนเทศ (Information) หมายถึง", "ภาพที่ 1.2"]),
-    dict(q="inner join กับ left join ต่างกันยังไง", topic=("บทสรุป บทที่ 10", "10.5 "), max_chars=2800,
-         has=["INNER JOIN จะมีลักษณะคล้ายกัน", "LEFT JOIN จะเน้นการนำเอาข้อมูลจากตารางทางซ้าย",
-              "คำสั่ง INNER JOIN เป็นคำสั่งที่ใช้ในการค้นหา", "วิธี LEFT JOIN เป็นการแสดงข้อมูลทุกแถว"],
-         lacks=["ตัวอย่างที่ 10.6", "ตัวอย่างที่ 10.11", "P6 | น้ำดื่มคริสตัล", "10001 | เครื่องดื่ม"]),
-    dict(q="innerjoin กับ left join ต่างกันยังไง", topic=("บทสรุป บทที่ 10", "10.5 "), max_chars=2800,
-         has=["INNER JOIN จะมีลักษณะคล้ายกัน", "วิธี LEFT JOIN เป็นการแสดงข้อมูลทุกแถว"],
-         lacks=["ตัวอย่างที่ 10.6", "ตัวอย่างที่ 10.11"]),
+    dict(q="inner join กับ left join ต่างกันยังไง", topic="บทสรุป บทที่ 10", max_chars=500,
+         has=["INNER JOIN จะมีลักษณะคล้ายกัน", "LEFT JOIN จะเน้นการนำเอาข้อมูลจากตารางทางซ้าย"],
+         lacks=["RIGHT JOIN", "FULL OUTER JOIN", "ข้อสังเกต", "ตัวอย่างที่ 10.6", "ตัวอย่างที่ 10.11", "P6 | น้ำดื่มคริสตัล"]),
+    dict(q="innerjoin กับ left join ต่างกันยังไง", topic="บทสรุป บทที่ 10", max_chars=500,
+         has=["INNER JOIN จะมีลักษณะคล้ายกัน", "LEFT JOIN จะเน้นการนำเอาข้อมูลจากตารางทางซ้าย"], lacks=["RIGHT JOIN"]),
     dict(q="ภาพที่ 1.1", topic="1.1 ", has=["![ภาพที่ 1.1]", "จากภาพที่ 1.1"], max_chars=800, lacks=["ภาพที่ 1.2"]),
     dict(q="ภาพที่ 1.4", topic="1.3 ", has=["![ภาพที่ 1.4]"], lacks=["ภาพที่ 1.5"]),   # เลขภาพ ไม่ใช่เลขหัวข้อ 1.4
     dict(q="ตารางที่ 4.3", topic="4.4 ", has=["ตารางที่ 4.3 ตารางสินค้า", "P0010 | สายยางรดน้ำ"],
@@ -69,11 +67,35 @@ REPORTED_CASES = [
     dict(q="ภาพที่ 99.9", topic=None),
 ]
 
+# ชุด "เปรียบเทียบ": ได้ย่อหน้าที่ตำราเทียบไว้เอง (ตัดเหลือช่วงที่เกี่ยว) หรือนิยามของสองฝั่ง ไม่ยกทั้งหัวข้อ ไม่ซ้อนกัน
+COMPARE_CASES = [
+    dict(q="left join กับ right join ต่างกันยังไง", topic="บทสรุป บทที่ 10", max_chars=300,
+         has=["LEFT JOIN จะเน้น", "RIGHT JOIN คือ จะเน้น"], lacks=["FULL OUTER JOIN", "EQUI JOIN"]),
+    dict(q="equi join กับ inner join ต่างกันยังไง", topic="10.5 ", max_chars=300,
+         has=["คล้ายกับวิธี EQUI JOIN แตกต่างกันตรง"], lacks=["ตัวอย่างที่ 10.6"]),
+    dict(q="where กับ having ต่างกันยังไง", topic="9.11 ", max_chars=400,
+         has=["ไม่สามารถใช้คีย์เวิร์ด WHERE"], lacks=["ตัวอย่างที่ 9.28", "ตารางที่ 9.37"]),
+    dict(q="คีย์หลักกับคีย์นอกต่างกันยังไง", topic="4.5 ประเภทของคีย์ · 3.", max_chars=1100,
+         has=["คีย์หลัก หมายถึง", "คีย์นอก หมายถึง"], lacks=["ตารางที่ 4.18", "4) คีย์นอก ไม่จำเป็น"]),
+    dict(q="1NF กับ 2NF ต่างกันยังไง", topic="7.5 ", max_chars=1200,
+         has=["First Normal Form : 1NF", "Second Normal Form : 2NF"], lacks=["ตารางที่ 7.", "3) การแปลงรีเลชัน 1NF มาเป็น 2NF"]),
+    dict(q="count กับ sum ต่างกันยังไง", topic="9.10 ", max_chars=500,
+         has=["9.10.3 ฟังก์ชัน COUNT()", "9.10.4 ฟังก์ชัน SUM()"], lacks=["9.10.1 ฟังก์ชัน MAX()", "ตัวอย่างที่ 9.23"]),
+    dict(q="one to one กับ one to many ต่างกันยังไง", topic="5.6 ประเภทความสัมพันธ์ · 1.", max_chars=700,
+         has=["หนึ่งสิ่งกับหนึ่งสิ่ง", "หนึ่งสิ่งต่อหลายสิ่ง"]),
+    dict(q="ฟิลด์กับเรคคอร์ดต่างกันยังไง", topic="1.3 ", max_chars=600,
+         has=["ฟิลด์ (Field) หมายถึง", "(Record) หมายถึง"], lacks=["ไบต์ (Byte)"]),
+    dict(q="สกีมากับอินสแตนซ์ต่างกันยังไง", topic="3.9 ", max_chars=400,
+         has=["สกีมา (Schema) หมายถึง", "อินสแตนซ์ (Instance) หมายถึง"]),
+    dict(q="ระบบแฟ้มข้อมูลกับระบบฐานข้อมูลต่างกันยังไง", topic="บทสรุป บทที่ 1", max_chars=1000),
+]
+
 # ชุด "พิมพ์เอง": คำถามแบบที่คนพิมพ์ ไม่ได้ลอกชื่อหัวข้อ
 NATURAL_CASES = [
     dict(q="สารสนเทศคืออะไร", topic="1.1 ", has=["สารสนเทศ (Information) หมายถึง"], lacks=["ข้อมูล (Data) หมายถึง", "ภาพที่ 1.3"]),
     dict(q="ข้อมูลคืออะไร", topic="1.1 ", has=["ข้อมูล (Data) หมายถึง"], lacks=["สารสนเทศ (Information) หมายถึง"]),
-    dict(q="ข้อมูลกับสารสนเทศต่างกันยังไง", topic="1.1 ", has=["ข้อมูล (Data) หมายถึง", "สารสนเทศ (Information) หมายถึง"]),
+    dict(q="ข้อมูลกับสารสนเทศต่างกันยังไง", topic="1.1 ", max_chars=900, lacks=["ข้อมูล (Data) หมายถึง", "ภาพที่ 1.2"],
+         has=["ข้อมูล หมายถึงข้อมูลที่เกิดจากการรวบรวม", "สารสนเทศ คือข้อมูลที่ผ่านการประมวลผลแล้ว"]),   # ย่อหน้าที่ตำราสรุปเทียบไว้
     dict(q="SQL คืออะไร", topic="8.1 ", has=["ภาษา SQL (Structured Query Language) เป็น"]),
     dict(q="sql คืออะไรครับ", topic="8.1 ", has=["ภาษา SQL (Structured Query Language) เป็น"]),
     dict(q="ฐานข้อมูลคืออะไร", topic="2.2 ", has=["ระบบฐานข้อมูล (Database System) เป็น"]),
@@ -111,7 +133,7 @@ NATURAL_CASES = [
     dict(q="ลบตารางยังไง", topic="8.5 "),
     dict(q="เพิ่มข้อมูลลงตาราง", topic="8.6 "),
     dict(q="ข้อดีของฐานข้อมูล", topic="2.5 "),
-    dict(q="INNER JOIN กับ LEFT JOIN ต่างกันยังไง", topic=("บทสรุป บทที่ 10", "10.5 "), has=["INNER JOIN", "LEFT JOIN"]),
+    dict(q="INNER JOIN กับ LEFT JOIN ต่างกันยังไง", topic="บทสรุป บทที่ 10", has=["INNER JOIN", "LEFT JOIN"], max_chars=500),
     # ค้นจากคำในชื่อหัวข้ออย่างเดียวพลาด ต้องอาศัย AI ตีความ (ai=True: ไม่นับตอนทดสอบแบบไม่ใช้ AI)
     dict(q="ชนิดข้อมูลใน SQL มีอะไรบ้าง", topic="8.2 ", ai=True),
     dict(q="join คืออะไร", topic=("10.2 ", "บทที่ 10 ")),
@@ -222,7 +244,7 @@ def main():
         return kb.answer_from_dataset([{"role": "user", "content": q}], selector=selector, memory=mem)
 
     groups = [("หัวข้อตามสารบัญ", toc_cases(kb)), ("หัวเรื่องย่อยในเนื้อหา", HEADING_CASES),
-              ("ที่ผู้ใช้รายงาน", REPORTED_CASES), ("พิมพ์เอง", NATURAL_CASES), ("พิมพ์เองแบบถ้อยคำอื่น", PARAPHRASE_CASES), ("นอกตำรา", OUTSIDE_CASES)]
+              ("ที่ผู้ใช้รายงาน", REPORTED_CASES), ("เปรียบเทียบ", COMPARE_CASES), ("พิมพ์เอง", NATURAL_CASES), ("พิมพ์เองแบบถ้อยคำอื่น", PARAPHRASE_CASES), ("นอกตำรา", OUTSIDE_CASES)]
     total_fail = 0
     for name, cases in groups:
         fails = need_ai = 0

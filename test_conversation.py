@@ -59,13 +59,15 @@ class Conversation(unittest.TestCase):
         self.assertTrue(got[0].startswith('4.5 ประเภทของคีย์ · 3. คีย์หลัก'))
         self.assertTrue(got[1].startswith('4.5 ประเภทของคีย์ · 4. คีย์นอก'))
         got = topics(chat('LEFT JOIN', 'แล้วมันต่างจาก INNER JOIN ยังไง')[1])
-        self.assertEqual([t[:5] for t in got], ['บทสรุ', '10.6 ', '10.5 '])   # ย่อหน้าที่ตำราเทียบไว้ + นิยามสองฝั่ง
+        self.assertEqual([t[:5] for t in got], ['บทสรุ'])                    # ช่วงที่ตำราเทียบสองเรื่องไว้เอง
+        answer = chat('LEFT JOIN', 'แล้วมันต่างจาก INNER JOIN ยังไง')[1]
+        self.assertEqual([c[:5] for c in re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)], ['บทสรุ', '10.6 ', '10.5 '])
         self.assertTrue(chat('LEFT JOIN', 'มันต่างกันยังไง')[1].startswith('ต้องการเทียบ'))
 
     def test_new_question_is_not_mixed_with_old_topic(self):
         # คำถามใหม่ที่ครบในตัวเอง ไม่เอาเรื่องที่คุยก่อนหน้ามาปน
         got = [t[:5] for t in topics(chat('GROUP BY', 'INNER JOIN กับ LEFT JOIN ต่างกันยังไง')[1])]
-        self.assertEqual(got, ['บทสรุ', '10.5 ', '10.6 '])                 # ไม่มี 9.11 GROUP BY ปน
+        self.assertEqual(got, ['บทสรุ'])                                   # ไม่มี 9.11 GROUP BY ปน
         self.assertEqual([t[:5] for t in topics(chat('GROUP BY', 'ขอตัวอย่าง LEFT JOIN')[1])], ['10.6 '])
         self.assertEqual(chat('ขอตัวอย่างเพิ่ม')[0], kb.NO_DATA)   # ยังไม่ได้คุยเรื่องอะไร
 

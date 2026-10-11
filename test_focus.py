@@ -54,12 +54,18 @@ class FocusedAnswers(unittest.TestCase):
     def assertVerbatim(self, answer):
         """ทุกบรรทัดเนื้อหาในคำตอบต้องเป็นบรรทัดในไฟล์ตำราตรงตัว (ยกเว้นชื่อหัวข้อ ที่มา รูป ปุ่ม)"""
         for line in answer.split('\n'):
-            if line.strip() and not FIXED.match(line) and line != kb.PARTIAL_NOTE:
+            if not line.strip() or FIXED.match(line) or line == kb.PARTIAL_NOTE:
+                continue
+            if line.startswith('… ') or line.endswith(' …'):       # ช่วงที่ตัดมาจากกลางย่อหน้า: เนื้อในต้องอยู่ในย่อหน้าของตำราตรงตัว
+                inner = line.removeprefix('… ').removesuffix(' …')
+                self.assertGreaterEqual(len(inner), 80)
+                self.assertTrue(any(inner in book_line for book_line in BOOK_LINES), inner[:60])
+            else:
                 self.assertIn(line, BOOK_LINES)
 
     def test_question_sets(self):
         # หัวข้อตามสารบัญทุกหัวข้อ, หัวเรื่องย่อยในเนื้อหา, คำถามแบบพิมพ์เอง, คำถามนอกตำรา (ไม่นับข้อที่ต้องใช้ AI)
-        for case in (ev.toc_cases(kb) + ev.HEADING_CASES + ev.REPORTED_CASES + ev.NATURAL_CASES
+        for case in (ev.toc_cases(kb) + ev.HEADING_CASES + ev.REPORTED_CASES + ev.COMPARE_CASES + ev.NATURAL_CASES
                      + ev.PARAPHRASE_CASES + ev.OUTSIDE_CASES):
             if case.get('ai'):
                 continue
@@ -123,21 +129,37 @@ class FocusedAnswers(unittest.TestCase):
         self.assertNotIn('Tesco Lotus', answer)                       # ไม่ลากไปถึงกรณีศึกษาของหัวข้อ
 
     def test_comparison_shows_what_the_book_compares(self):
+        # ตำราเทียบ INNER/LEFT ไว้เองในบทสรุปบทที่ 10 (ย่อหน้าเดียวพูดถึง JOIN ทุกชนิด): ได้เฉพาะช่วงที่พูดถึงสองเรื่องนี้
         answer = ask('inner join กับ left join ต่างกันยังไง')
         heads = [l[3:] for l in answer.split('\n') if l.startswith('## ')]
-        self.assertTrue(heads[0].startswith('บทสรุป บทที่ 10'))               # ย่อหน้าที่ตำราเทียบไว้เองมาก่อน
-        self.assertEqual([h[:5] for h in heads[1:]], ['10.5 ', '10.6 '])
-        self.assertIn('INNER JOIN จะมีลักษณะคล้ายกัน', answer)
-        self.assertNotIn('ตัวอย่างที่ 10.6', answer)                          # ไม่ยกตัวอย่างของทั้งสองหัวข้อมาต่อกัน
-        self.assertLess(len(answer), 3000)
-        for t in heads[1:]:                                                   # ปุ่มอ่านหัวข้อเต็มของแต่ละฝั่ง
-            self.assertIn(f'[[ถาม:{t}]]', answer)
+        self.assertEqual(len(heads), 1)
+        self.assertTrue(heads[0].startswith('บทสรุป บทที่ 10'))
+        body = ev.content(kb, answer)
+        self.assertIn('INNER JOINจะใส่เงื่อนไขหลังคำสั่ง ON ส่วนวิธีการเลือกข้อมูลแบบ LEFT JOIN จะเน้น', body)
+        self.assertNotIn('RIGHT JOIN', body)                                  # ท่อนของ JOIN ชนิดอื่นไม่ติดมา
+        self.assertTrue(body.strip().endswith(' …'))                          # บอกว่าตัดมาจากกลางย่อหน้า
+        self.assertLess(len(body), 400)
+        chips = re.findall(r'^\[\[ถาม:(.+)\]\]$', answer, re.M)             # ปุ่มอ่านหัวข้อเต็มของแต่ละฝั่ง
+        self.assertEqual([c[:5] for c in chips], ['บทสรุ', '10.5 ', '10.6 '])
         self.assertEqual(ask('innerjoin กับ left join ต่างกันยังไง'), answer)   # พิมพ์ติดกันได้คำตอบเดียวกัน
-        # ไม่มีย่อหน้าที่ตำราเทียบไว้ (คีย์หลัก/คีย์นอก): แสดงนิยามของสองฝั่งคู่กัน ไม่เดาความต่างเอง
-        heads = [l[3:] for l in ask('คีย์หลักกับคีย์นอกต่างกันยังไง').split('\n') if l.startswith('## ')]
+
+    def test_comparison_without_a_comparing_paragraph_shows_both_definitions(self):
+        # ตำราไม่ได้เทียบคีย์หลักกับคีย์นอกไว้: นิยามของสองฝั่งคู่กัน (ย่อหน้าเดียวต่อฝั่ง) ไม่เดาความต่างเอง
+        answer = ask('คีย์หลักกับคีย์นอกต่างกันยังไง')
+        heads = [l[3:] for l in answer.split('\n') if l.startswith('## ')]
         self.assertEqual(len(heads), 2)
         self.assertTrue(heads[0].startswith('4.5 ประเภทของคีย์ · 3. คีย์หลัก'))
         self.assertTrue(heads[1].startswith('4.5 ประเภทของคีย์ · 4. คีย์นอก'))
+        body = ev.content(kb, answer)
+        self.assertNotIn('4) คีย์นอก ไม่จำเป็น', body)        # ข้อย่อยที่แค่เอ่ยถึงทั้งสองคำ ไม่ใช่การเทียบ
+        self.assertNotIn('ตารางที่ 4.18', body)                # ไม่มีตารางตัวอย่างของฝั่งใดฝั่งหนึ่ง
+
+    def test_comparison_never_dumps_whole_sections(self):
+        # เดิมยกทั้งหัวข้อ: where/having ได้ทั้ง 9.11 (1,901), count/sum ได้ทั้ง 9.10 (3,643), ข้อมูล/สารสนเทศ 2,500
+        for q, limit in [('where กับ having ต่างกันยังไง', 400), ('count กับ sum ต่างกันยังไง', 500),
+                         ('ข้อมูลกับสารสนเทศต่างกันยังไง', 900), ('one to one กับ one to many ต่างกันยังไง', 700)]:
+            with self.subTest(q=q):
+                self.assertLess(len(ev.content(kb, ask(q)).strip()), limit)
 
     def test_partial_answer_offers_the_whole_topic(self):
         answer = ask('ทูเพิลคืออะไร')
