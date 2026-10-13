@@ -506,13 +506,12 @@ def _example_end(us, k, used):
     return j
 
 
-def _example_snippets(entry, terms):
-    """ตัวอย่างในหัวข้อนี้ที่เกี่ยวกับคำหลัก (ข้อความจากตำราตรงตัว) เรียงตามลำดับในหัวข้อ:
+def _example_spans(entry, terms):
+    """ช่วงย่อหน้า (เริ่ม, จบไม่รวม) ของตัวอย่างในหัวข้อนี้ที่เกี่ยวกับคำหลัก เรียงตามลำดับในหัวข้อ:
     คำสั่ง SQL ที่มีคำหลัก + บรรทัดนำ ("ตัวอย่างที่ …") + ตารางผลลัพธ์ที่ตามมา, บรรทัด "เช่น …" ที่มีคำหลัก
-    หรือหัวตัวอย่าง ("ตัวอย่างข้อมูล") พร้อมเนื้อตัวอย่างที่ตามมา"""
+    หรือหัวตัวอย่าง ("ตัวอย่างข้อมูล") พร้อมเนื้อตัวอย่างที่ตามมา  terms = None: ตัวอย่างทุกอันของหัวข้อนี้"""
     blocks = _blocks(entry["description"])
     us = [text for _, text in blocks]
-    # terms = None: ตัวอย่างทุกอันของหัวข้อนี้ (หัวข้อที่ชื่อคือเรื่องที่ถาม และแสดงไปแค่บางส่วน)
     has = lambda t: terms is None or any(term.lower() in t.lower() for term in terms)
     found, used = [], set()
     for k, (kind, text) in enumerate(blocks):
@@ -524,7 +523,7 @@ def _example_snippets(entry, terms):
                     " | " in blocks[end][1] or blocks[end][1].startswith("ตารางที่")):
                 end += 1
             used.update(range(start, end))
-            found.append((start, "\n".join(us[start:end])))
+            found.append((start, end))
     for k, (kind, text) in enumerate(blocks):
         head = text.strip()
         if k in used or kind != "text" or not has(text) or not re.search(r"ตัวอย่าง|เช่น", text) or text.startswith("ภาพที่"):
@@ -536,8 +535,14 @@ def _example_snippets(entry, terms):
             # หัวตัวอย่าง: เอาเนื้อตัวอย่างที่ตามมาด้วย (หัวอย่างเดียวไม่ใช่ตัวอย่าง)
             end = max(subheading_block(entry, k)) + 1 if _is_subheading(us, k) else _example_end(us, k, used)
         used.update(range(k, end))
-        found.append((k, "\n".join(us[k:end])))
-    return [snippet for _, snippet in sorted(found)]
+        found.append((k, end))
+    return sorted(found)
+
+
+def _example_snippets(entry, terms):
+    """ข้อความของตัวอย่างแต่ละก้อนจาก _example_spans (ข้อความจากตำราตรงตัว)"""
+    us = units(entry)
+    return ["\n".join(us[a:b]) for a, b in _example_spans(entry, terms)]
 
 
 def _topic_name(current):
@@ -1272,12 +1277,12 @@ def _unit_of(k):
     return k[0] if isinstance(k, tuple) else k
 
 
-def _brief_end(u, begin, after, limit=COMPARE_SIDE_MAX):
+def _brief_end(u, begin, after, limit=COMPARE_SIDE_MAX, examples=True):
     """ตำแหน่งจบของใจความเปิดของย่อหน้า นับจาก begin: จบก่อนตัวอย่าง ("เช่น …" "ดังภาพที่ …") และยาวราว limit ตัวอักษร
     ตัดได้เฉพาะรอยต่อประโยค (เว้นวรรคระหว่างข้อความไทยนอกวงเล็บ เลือกที่ขึ้นด้วยคำเชื่อม "โดย/ซึ่ง/แต่…" ก่อน)
     after = ตำแหน่งที่ต้องแสดงให้ถึงเป็นอย่างน้อย (ศัพท์ที่เทียบถูกเอ่ยถึงตรงนั้น) คืน len(u) ถ้าไม่ต้องตัด"""
     floor = max(begin + 40, after + 30)
-    end = next((m.start() for m in _EXAMPLE_START.finditer(u) if m.start() >= floor), len(u))
+    end = next((m.start() for m in _EXAMPLE_START.finditer(u) if m.start() >= floor), len(u)) if examples else len(u)
     if end - begin <= limit + COMPARE_SLACK:
         return end
     gaps = [m for m in _CLAUSE_GAP.finditer(u, 0, end) if m.start() >= floor
@@ -1469,11 +1474,329 @@ def _shows_terms(plan, terms):
     return any(k in text for k in keys)
 
 
+# ---------------------------------------------------------------- ชนิดของคำถาม และตัดคำตอบให้พอดีกับที่ถาม
+# ถามตัวอย่าง/เหตุผล/ขั้นตอน/ข้อดี ไม่ได้ต้องการทั้งหัวข้อ: แต่ละชนิดมีเพดานความยาวของเนื้อหา และบอก AI ว่าควรเลือกประโยคแบบไหน
+# AI เลือกได้แค่เลขย่อหน้า/เลขประโยค ข้อความทุกตัวอักษรยังมาจากตำรา ส่วนที่เกินเพดานถูกตัดที่รอยต่อประโยคเสมอ
+_TYPE_RULES = (
+    ("example", re.compile(r"ตัวอย่าง|example", re.I)),
+    ("why", re.compile(r"ทำไม|เพราะอะไร|เหตุผล|ความสำคัญ|ประโยชน์|สำคัญ(?:ยังไง|อย่างไร)|ช่วยอะไร|\bwhy\b", re.I)),
+    ("properties", re.compile(r"ข้อดี|ข้อเสีย|ข้อจำกัด|คุณสมบัติ|ลักษณะ|ประเภท|ชนิด|องค์ประกอบ|มีกี่|"
+                              r"กี่(?:แบบ|ประเภท|ชนิด|ข้อ|ระดับ|ส่วน|ขั้น)|อะไรบ้าง|แบ่งเป็น")),
+    ("steps", re.compile(r"ขั้นตอน|วิธี|ยังไง|อย่างไร|\bhow\b", re.I)),
+    ("summary", re.compile(r"สรุป|ภาพรวม|โดยย่อ|\bsummary\b", re.I)),
+)
+TYPE_CEILING = {"meaning": 900, "example": 1500, "steps": 1500, "why": 800, "properties": 1200,
+                "summary": 1000, "explain": 1000, "topic": 1500}
+ANALYTIC_TYPES = {"example", "why", "steps", "properties", "summary", "explain"}   # ผ่าน AI (และคำตอบที่จำไว้) แม้หาหัวข้อเจอแล้ว
+TYPE_HINT = {
+    "example": "The student wants EXAMPLES. Choose the worked examples: sentences that start with เช่น/ตัวอย่าง, and an example "
+               "SQL statement with its result table. Leave out the definition and the theory around them.",
+    "why": "The student asks WHY or what it is for. Choose only the sentences that give the reason, purpose, benefit or "
+           "importance. Leave out examples, syntax and the definition unless they state the reason.",
+    "steps": "The student asks HOW or for the steps. Choose the sentences or numbered items that describe the procedure or "
+             "the syntax, in order, with the SQL syntax block if there is one. Leave out the definition and long examples.",
+    "properties": "The student asks for a list (types, features, advantages, characteristics). Choose the list items and the "
+                  "one-line explanation of each item. Leave out the long examples and the general introduction.",
+    "summary": "The student asks for a summary. Choose the sentences that state the main points or the conclusion.",
+    "explain": "The student asks to explain a topic. Choose the definition and the sentences that explain how it works. "
+               "Leave out the examples, the figure walkthroughs and related topics.",
+    "meaning": "The student asks what it means. Choose only the sentences that define it.",
+    "topic": "",
+}
+_SEG_MIN_PARAGRAPH = 160   # ย่อหน้าสั้นกว่านี้เป็นก้อนเดียว ไม่แบ่งประโยค
+_SEG_MIN_RUN = 25          # ประโยคสั้นกว่านี้ไม่แยกเป็นก้อนเอง ("คน สถานที่ สิ่งของ")
+_OVERSHOOT = 700           # เกินเพดานได้เท่านี้เพื่อให้รายการ/ตาราง/โค้ดที่ย่อหน้านำเกริ่นไว้ครบ
+
+
+def _names_heading(query):
+    """พิมพ์ชื่อหัวข้อเฉย ๆ (มีหรือไม่มีเลข) หรือเลขหัวข้อ/บท = ต้องการทั้งหัวข้อนั้น ไม่ใช่คำถามเชิงวิเคราะห์
+    ("คีย์หลัก" ได้ทั้งหัวข้อ แต่ "คีย์หลักคืออะไร" เป็นคำถามความหมาย)"""
+    if names_topic(query):
+        return True
+    text = re.sub(r"[\s?!.ๆ]+|(?:ครับ|คับ|ค่ะ|คะ|นะ|จ้า|หน่อย)+$", "", _split_glued(query).lower())
+    key = _term_key(text)
+    return len(key) >= 4 and any(key in (_term_key(_heading(e)), _term_key(_own_title(e)))
+                                 for e in ENTRIES if not _is_meta(e["topic"]))
+
+
+def question_type(query):
+    """ชนิดของคำถาม: compare / example / why / properties / steps / summary / meaning / explain / topic (พิมพ์แค่ชื่อเรื่อง)"""
+    text = _split_glued(query)
+    if _COMPARE_RE.search(text):
+        return "compare"
+    for name, rx in _TYPE_RULES:
+        if rx.search(text):
+            return name
+    if asks_meaning(text):
+        return "meaning"
+    if re.search(r"อธิบาย|เล่า|ขยายความ|explain", text, re.I):
+        return "explain"
+    return "topic"
+
+
+def _balanced(u, pos):
+    return u.count("(", 0, pos) == u.count(")", 0, pos) and u.count("“", 0, pos) == u.count("”", 0, pos)
+
+
+def _cut_points(u):
+    """รอยต่อประโยคของย่อหน้า [(ท้ายประโยคก่อน, ต้นประโยคถัดไป)]: เว้นวรรคระหว่างข้อความไทยนอกวงเล็บ/อัญประกาศ
+    ที่ประโยคก่อนหน้ายาวพอ และประโยคถัดไปขึ้นด้วยคำเชื่อม/เช่น/ได้แก่ หรือประโยคก่อนหน้ายาวมาก
+    และตรงคำว่า "เช่น" ที่ตำราเขียนติดกับคำก่อนหน้า ("…ระหว่างตารางเช่น ตารางแผนก…") เพื่อแยกท่อนตัวอย่างออกจากนิยาม"""
+    gaps = [(m.start(), m.end()) for m in _CLAUSE_GAP.finditer(u)]
+    glued = [(m.start(), m.start()) for m in re.finditer(r"(?<=[฀-๿])เช่น(?!เดียว|กัน|นี้|นั้น)", u)]
+    cuts, last = [], 0
+    for a, b in sorted(set(gaps) | set(glued)):
+        if a < last or a - last < _SEG_MIN_RUN or not _balanced(u, a):
+            continue
+        nxt = u[b:]
+        opener = (_CLAUSE_WORD.match(nxt) or _EXAMPLE_START.match(nxt) or re.match(r"\S{1,40}\s*ได้แก่", nxt)
+                  or re.match(r"\d{1,2}\s*[.)]", nxt))
+        if opener or a - last >= 80:
+            cuts.append((a, b))
+            last = b
+    return cuts
+
+
+def segments(u):
+    """ย่อหน้า -> [(เริ่ม, จบ)] ของแต่ละประโยค/ท่อน เรียงตามลำดับ (ย่อหน้าสั้น โค้ด และแถวตารางเป็นก้อนเดียว)"""
+    if len(u) < _SEG_MIN_PARAGRAPH or u.startswith("```") or " | " in u:
+        return [(0, len(u))]
+    spans, start = [], 0
+    for a, b in _cut_points(u):
+        spans.append((start, a))
+        start = b
+    spans.append((start, len(u)))
+    if len(spans) > 1 and spans[-1][1] - spans[-1][0] < _SEG_MIN_RUN:
+        spans[-2] = (spans[-2][0], spans[-1][1])      # ท่อนท้ายสั้นมาก ไปอยู่กับท่อนก่อนหน้า
+        spans.pop()
+    return spans
+
+
+def _normalize_picks(picked):
+    """รายการย่อหน้า/ช่วงที่เลือก -> เรียงตามลำดับในเล่ม ไม่ซ้ำ: ย่อหน้าที่เลือกทั้งย่อหน้าแล้วไม่ต้องมีช่วงของมันอีก
+    ช่วงที่ติดกันของย่อหน้าเดียวกันรวมเป็นช่วงเดียว"""
+    whole = {k for k in picked if not isinstance(k, tuple)}
+    spans = {}
+    for k in picked:
+        if isinstance(k, tuple) and k[0] not in whole:
+            spans.setdefault(k[0], []).append((k[1], k[2]))
+    out = list(whole)
+    for k, items in spans.items():
+        merged = []
+        for a, b in sorted(items):
+            if merged and a <= merged[-1][1] + 3:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        out += [(k, a, b) for a, b in merged]
+    return sorted(out, key=lambda x: (_unit_of(x), x[1] if isinstance(x, tuple) else -1))
+
+
+def _is_open(prev, nxt, over):
+    """ตัดตรงนี้แล้วคำตอบจะค้างกลางทาง: ย่อหน้านำที่เกริ่นรายการ/โค้ด/ตาราง ("…ดังนี้") คำบรรยายภาพ หรือแถวตารางที่ยังไม่จบ"""
+    prev, nxt = prev.strip(), nxt.strip()
+    if " | " in prev and " | " in nxt:
+        return True
+    if over >= _OVERSHOOT:
+        return False
+    item = r"\d{1,2}\s*[.)]\s*\S"
+    return bool(_INTRO_END.search(prev) or _CAPTION.match(prev) or prev.startswith("ที่มา")
+                or re.match(r"ภาพที่\s*\d", nxt)       # รูปที่ตามหลังเนื้อหาที่แสดงอยู่ (ภาพไม่นับเป็นความยาวข้อความ)
+                or (re.match(item, prev) and re.match(item, nxt)))   # รายการข้อ 1) 2) 3) ไม่ตัดกลางรายการ
+
+
+def _is_heading_only(u):
+    names, full = _defined_terms(u)
+    return bool(names) and not full
+
+
+def attach_units(us, picked):
+    """ย่อหน้าที่ต้องไปด้วยกัน แม้ไม่ได้ถูกเลือก: ตาราง/โค้ด/ที่มาของรูปที่ตามหลังย่อหน้าที่เลือก,
+    คำบรรยายรูป "ภาพที่ X" คู่กับคำอธิบาย "จากภาพที่ X", และบรรทัดเนื้อหาของหัวข้อย่อยที่เลือก
+    picked = เลขย่อหน้า และช่วง (เลข, เริ่ม, จบ) ปนกันได้ คืนรายการเรียงตามลำดับในเล่ม"""
+    spans = [k for k in picked if isinstance(k, tuple)]
+    base = {_unit_of(k) for k in picked}
+    out = {k for k in picked if not isinstance(k, tuple)}
+    for k in sorted(base):
+        j = k + 1
+        while j < len(us) and (us[j].startswith("```") or " | " in us[j] or re.match(r"^ที่มา\s*:?", us[j])):
+            out.add(j)
+            j += 1
+        cap = _CAPTION.match(us[k].strip())
+        if cap or _is_heading_only(us[k]):       # เลือกคำบรรยายรูป/หัวเรื่อง ต้องได้คำอธิบายที่ตามมาด้วย
+            if j < len(us) and not _CAPTION.match(us[j]):
+                out.add(j)
+        ref = re.match(r"^จาก\s*(ภาพ|ตาราง)ที่\s*(\d+\.\d+)", us[k].strip())
+        if ref:                                  # "จากภาพที่ 1.2 …" ต้องมีรูป 1.2 ให้เห็นด้วย
+            for j in range(k - 1, max(-1, k - 12), -1):
+                if re.match(r"^" + ref.group(1) + r"ที่\s*" + re.escape(ref.group(2)) + r"(?!\d)", us[j].strip()):
+                    out.update(range(j, k))
+                    break
+    return _normalize_picks(sorted(out) + spans)
+
+
+def _plan_size(plan):
+    total = 0
+    for entry, picked in plan:
+        if picked == LINK:
+            continue
+        for e in (section_parts(entry) if picked is None else [entry]):
+            us = units(e)
+            for k in (_normalize_picks(picked) if picked else range(len(us))):
+                total += (k[2] - k[1]) if isinstance(k, tuple) else len(us[k])
+    return total
+
+
+def _take(us, items, budget, examples):
+    """เอารายการ (เลขย่อหน้า/ช่วง) ตามลำดับจนเต็ม budget ตัวอักษร: (ที่เอา, ความยาวที่ใช้, ถูกตัดไหม)
+    เกิน budget ได้เล็กน้อยเมื่อจบรายการ/ตาราง/โค้ด/รูปที่ย่อหน้านำเกริ่นไว้ ย่อหน้าที่ทำให้เกินตัดที่รอยต่อประโยค"""
+    kept, used, prev = [], 0, ""
+    for it in items:
+        k, b, en = (it[0], it[1], it[2]) if isinstance(it, tuple) else (it, 0, len(us[it]))
+        u = us[k]
+        if used >= budget and not _is_open(prev, u, used - budget):
+            return kept, used, True
+        prose = len(u.strip()) >= 80 and " | " not in u and not u.startswith("```") and not _CAPTION.match(u.strip())
+        # ย่อหน้านำที่เกริ่นรายการ ("…ได้แก่") ให้ข้อของรายการตามมาครบ แม้เกินเพดานเล็กน้อย
+        listed = _is_open(prev, u, max(0, used - budget)) and used + (en - b) <= budget + _OVERSHOOT
+        if prose and used + (en - b) > budget and not listed:
+            room = budget - used
+            if room < 150 and kept:
+                return kept, used, True            # เหลือที่ไม่พอให้ท่อนที่อ่านรู้เรื่อง ไม่ตัดเป็นเศษ
+            end = min(en, _brief_end(u, b, b, limit=max(room, 200), examples=examples))
+            if end - b < en - b:
+                return kept + [(k, b, end)], used + end - b, True
+        kept.append(it)
+        used += en - b
+        prev = u
+    return kept, used, False
+
+
+def _numbered_blocks(us, items):
+    """หัวข้อที่เป็นรายการข้อ ("1. DDL … 2. DML … 3. DCL …"): [ส่วนนำ, ข้อ 1, ข้อ 2, …] หรือ None ถ้าไม่ใช่รายการ
+    ข้อระดับบน "1." มาก่อนข้อย่อย "1)" ("1. DDL" มี "1) Create 2) Alter 3) Drop" อยู่ในข้อ)"""
+    for style in (r"\d{1,2}\.\s+\S",):
+        heads = [n for n, k in enumerate(items)
+                 if not isinstance(k, tuple) and re.match(style, us[k].strip()) and " | " not in us[k]
+                 and not us[k].startswith("```") and len(us[k]) < 700]
+        if 3 <= len(heads) <= 7:               # ข้อเยอะมาก (ขั้นตอนซ้ำหลายตัวอย่าง) ไม่ใช่รายการสั้น ๆ ที่เทียบกันได้
+            cuts = [0] + heads + [len(items)]
+            return [items[x:y] for x, y in zip(cuts, cuts[1:]) if items[x:y]]
+    return None
+
+
+def _limit_plan(plan, ceiling, examples=True):
+    """ตัดแผนคำตอบให้เนื้อหาไม่เกิน ceiling ตัวอักษร (เกินได้เล็กน้อยเมื่อจบรายการ/ตาราง/โค้ดที่เริ่มไว้) ที่รอยต่อประโยคเสมอ
+    - หัวข้อเดียว: ตามลำดับในเล่มจนเต็ม ย่อหน้าที่ทำให้เกินตัดแล้วใส่ … (หัวข้อที่เป็นรายการข้อ แบ่งที่ให้ทุกข้อเท่า ๆ กัน)
+    - หลายหัวข้อ: แบ่งที่ให้แต่ละหัวข้อ ไม่ให้หัวข้อแรกใช้หมด
+    - หัวข้อที่แบ่งเป็นหลายส่วน ("คีย์มีกี่ประเภท"): ใจความเปิดของทุกส่วน
+    มีปุ่มอ่านหัวข้อหลักเมื่อมีส่วนที่ไม่ได้แสดง แผนที่ไม่เกินอยู่แล้วคืนตามเดิม"""
+    if _plan_size(plan) <= ceiling + 150:
+        return plan
+    real = [item for item in plan if item[1] != LINK]
+    if len(real) > 1:
+        share = max(ceiling // len(real), 450)
+        return [piece for item in plan for piece in ([item] if item[1] == LINK else _limit_plan([item], share, examples))]
+    out, used, stopped = [], 0, False
+    for entry, picked in plan:
+        if picked == LINK:
+            out.append((entry, LINK))
+            continue
+        parts = section_parts(entry)
+        if picked is None and len(parts) > 2 and _plan_size([(entry, None)]) > ceiling + 150:
+            # หัวข้อที่แบ่งเป็นหลายส่วน ("คีย์มีกี่ประเภท"): ใจความเปิดของทุกส่วน ดีกว่าแสดงเต็มแค่สองสามส่วนแรกแล้วหมดเพดาน
+            for part in parts:
+                e, brief = _brief_core(_entry_core(part))
+                if brief:
+                    out.append((e, brief))
+            out.append((entry, LINK))
+            continue
+        for e in (parts if picked is None else [entry]):
+            if stopped:
+                break
+            us = units(e)
+            items = _normalize_picks(picked) if picked else list(range(len(us)))
+            blocks = _numbered_blocks(us, items)
+            if blocks:
+                share = max((ceiling - used) // len(blocks), 220)
+                kept, truncated = [], False
+                for block in blocks:
+                    got, spent, cut = _take(us, block, share, examples)
+                    kept += got
+                    used += spent
+                    truncated = truncated or cut
+            else:
+                kept, spent, truncated = _take(us, items, ceiling - used, examples)
+                used += spent
+            if kept:
+                out.append((e, [] if kept == list(range(len(us))) else kept))
+            stopped = truncated
+        if stopped:
+            main = next((x for x in ENTRIES if x["topic"] == entry["topic"].split(" · ")[0]), entry)
+            if main["topic"] != (out[-1][0]["topic"] if out else ""):
+                out.append((main, LINK))               # ปุ่มอ่านทั้งหัวข้อ
+    return out or plan
+
+
+_TYPE_WORDS = re.compile(r"ขอ|ยก|ตัวอย่าง(?:ของ|การใช้|การ)?|example|ทำไม(?:ต้อง)?(?:ทำ|มี|ใช้|รู้)?|ประโยชน์(?:ของ)?|ความสำคัญ(?:ของ)?|"
+                         r"ข้อดี(?:และ|กับ)?(?:ข้อเสีย)?(?:ของ)?|ข้อเสีย(?:ของ)?|ข้อจำกัด(?:ของ)?|คุณสมบัติ(?:ของ)?|"
+                         r"ขั้นตอน(?:การ)?(?:ทำ|สร้าง|ใช้)?|วิธี(?:การ)?(?:ใช้งาน|ใช้|ทำ|สร้าง)?|สรุป(?:เรื่อง)?|อธิบาย(?:เรื่อง)?|"
+                         r"มีอะไรบ้าง|อะไรบ้าง|ลักษณะ(?:ของ)?|ประเภท(?:ของ)?|ชนิด(?:ของ)?|เรื่อง|การใช้|ใช้|ยังไง|อย่างไร|"
+                         r"[?？!]", re.I)
+
+
+def _subject(query):
+    """เรื่องที่ถามในคำถามเชิงวิเคราะห์ ตัดคำบอกชนิดคำถามออก: "ขอตัวอย่างคีย์นอก" -> "คีย์นอก" """
+    terms = _asked_terms(query)
+    text = _TYPE_WORDS.sub(" ", terms[0]) if len(terms) == 1 else ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def typed_key(query):
+    """กุญแจของ (ชนิดคำถาม, หัวข้อ): "ขอตัวอย่างคีย์นอก" "ยกตัวอย่างคีย์นอก" "ตัวอย่าง foreign key" ใช้คำตอบที่จำไว้ร่วมกัน
+    ใช้เมื่อเรื่องที่ถามเป็นชื่อของหัวข้อที่ค้นเจออันดับแรกเท่านั้น ไม่ใช่แค่คำที่บังเอิญตรงกัน"""
+    qtype = question_type(query)
+    if qtype not in ANALYTIC_TYPES or _names_heading(query):
+        return None
+    subject = _term_key(_subject(query))
+    if len(subject) < 3:
+        return None
+    entries = search(query, limit=1)
+    if not entries:
+        return None
+    names = {_term_key(n) for n in _title_names(entries[0])}
+    if subject not in names and not (len(subject) >= 4 and subject in _term_key(entries[0]["topic"])):
+        return None
+    return f"{qtype}|{entries[0]['topic']}"
+
+
+def _example_plan(entries, subject):
+    """ตัวอย่างของเรื่องที่ถาม (เฉพาะก้อนตัวอย่างของหัวข้อที่ค้นเจอ ไม่แนบนิยาม) หรือ [] ถ้าหัวข้อนั้นไม่มีตัวอย่าง"""
+    for entry in entries[:2]:
+        plan = []
+        for part in section_parts(entry):
+            terms = ([subject] if subject else []) + key_terms(part)
+            spans = _example_spans(part, terms) or _example_spans(part, None)
+            us, picked = units(part), set()
+            for a, b in spans:
+                for k in range(a, b):
+                    u = us[k]
+                    segs = segments(u)
+                    # "นิยาม … เช่น …" ในย่อหน้าเดียว: เอาเฉพาะท่อนตัวอย่างตั้งแต่ "เช่น" เป็นต้นไป ไม่แนบนิยามที่ตามมาด้วย
+                    start = next((i for i, (x, _) in enumerate(segs) if _EXAMPLE_START.match(u, x)), 0)
+                    picked.add((k, segs[start][0], len(u)) if start and k == a else k)
+            if picked:
+                plan.append((part, attach_units(us, picked)))   # ตัวอย่างที่เกริ่นว่า "ดังตารางต่อไปนี้" ต้องได้ตารางด้วย
+        if plan:
+            return plan
+    return []
+
+
 def _followup_chips(entry, picked):
     """ปุ่มต่อจากคำตอบบางส่วน: ถ้าย่อหน้าถัดไปในเล่มเป็นตัวอย่าง ("ตัวอย่างข้อมูล") หรือภาพ/ตาราง ("ภาพที่ 1.1 …")
     ให้ปุ่มถามถึงสิ่งนั้นโดยตรง (ข้อความปุ่มต้องตอบได้ตรงเรื่องเดียว จึงใช้เฉพาะชื่อที่ไม่ซ้ำกันในเล่ม)"""
     us = units(entry)
-    nxt = next((k for k in range(max(picked) + 1, len(us)) if us[k].strip()), None)
+    nxt = next((k for k in range(max(_unit_of(k) for k in picked) + 1, len(us)) if us[k].strip()), None)
     if nxt is None:
         return []
     u = us[nxt].strip()
@@ -1486,7 +1809,7 @@ def _followup_chips(entry, picked):
     return []
 
 
-def render_plan(plan, first_chips=()):
+def render_plan(plan, first_chips=(), follow_chips=True):
     """plan: [(หัวข้อ, ย่อหน้าที่เลือก)] ย่อหน้าที่เลือก None = ทั้งหัวข้อรวมหัวข้อย่อยทุกส่วน,
     [] = ทั้งหัวข้อเฉพาะส่วนนี้ (ไม่รวมหัวข้อย่อย), [เลข...] = เฉพาะย่อหน้าเหล่านั้น ตามลำดับในเล่ม
     คำตอบที่แสดงบางส่วนมีหมายเหตุกับปุ่มต่อ (ตัวอย่าง/ภาพที่ตามมา และทั้งหัวข้อ) ท้ายคำตอบครั้งเดียว
@@ -1512,15 +1835,17 @@ def render_plan(plan, first_chips=()):
         parts = section_parts(entry) if picked is None else [entry]
         for e in parts:
             us = units(e)
-            cut = bool(picked) and any(isinstance(k, tuple) for k in picked)
-            partial = cut or (bool(picked) and len(set(picked)) < len(us))
-            order = sorted(set(picked), key=lambda k: k[0] if isinstance(k, tuple) else k) if partial else []
+            picked_here = _normalize_picks(picked) if picked else picked
+            cut = bool(picked_here) and any(isinstance(k, tuple) for k in picked_here)
+            cut_mid = cut and any(isinstance(k, tuple) and k[1] > 0 for k in picked_here)
+            partial = cut or (bool(picked_here) and len(picked_here) < len(us))
+            order = picked_here if partial else []
             text = "\n".join(piece(us, k) for k in order) if partial else e["description"]
             # บท + เลขหน้า มาจากส่วน "แหล่งอ้างอิง" ของหัวข้อในไฟล์ (ตรวจกับสารบัญและหน้า PDF แล้ว)
             block = ["## " + e["topic"], with_figures(text), _source_line(e)]
             if partial:
                 partials += 1
-                follow += [] if cut else _followup_chips(e, picked)
+                follow += [] if cut_mid or not follow_chips else _followup_chips(e, picked_here)
                 chips.append(e["topic"])
             elif picked is not None and len(section_parts(e)) > 1:
                 chips.append(e["topic"])       # หัวข้อย่อยที่ไม่ได้แสดง อ่านต่อได้จากหัวข้อหลัก
@@ -1536,11 +1861,11 @@ def render_plan(plan, first_chips=()):
 def render_compared(plan, terms=()):
     """คำตอบเปรียบเทียบ: แสดงแค่ใจความเปิดของแต่ละเรื่อง ตัวอย่างไม่แสดงมาเอง
     ถ้าตำรามีตัวอย่างของเรื่องที่เทียบ มีปุ่ม "ขอตัวอย่าง" ให้ผู้ใช้ขอเอง (กดแล้วได้เท่ากับพิมพ์ "ขอตัวอย่าง" ต่อจากคำตอบนี้)"""
-    text = render_plan(plan)
+    text = render_plan(plan, follow_chips=False)
     shown = [e for e, picked in plan if picked != LINK]
     if PARTIAL_MARK not in text or not _examples(shown, text, terms, partial=True)[0]:
         return text
-    return render_plan(plan, first_chips=[EXAMPLE_CHIP])
+    return render_plan(plan, first_chips=[EXAMPLE_CHIP], follow_chips=False)
 
 
 def question_key(query):
@@ -1584,12 +1909,16 @@ def _decide(query, plan, selector, memory):
     2) ยังไม่เคย -> ให้ AI ช่วยเลือก แล้วจำคำตอบที่แสดงไว้ (รวมกรณีที่ AI ใช้ไม่ได้และตอบด้วยวิธีค้นเอง)
     3) จำเพิ่มไม่ได้ (บน Vercel) -> ไม่เรียก AI สด ใช้วิธีค้นเองซึ่งได้ผลเดิมทุกครั้ง"""
     book = DOCUMENT_META.get("markdown_sha256")
-    key = question_key(query)
+    key, shared = question_key(query), typed_key(query)
     if memory is not None:
-        stored = memory.get(key, book)
-        restored = plan_from_json(stored.get("plan")) if isinstance(stored, dict) else None
-        if restored is not None:
-            return restored
+        # คำตอบของคำถามนี้เอง หรือของ (ชนิดคำถาม, หัวข้อ) เดียวกัน: "ขอตัวอย่างคีย์นอก" กับ "ยกตัวอย่าง foreign key" ได้คำตอบเดียวกัน
+        for k in (key, shared):
+            stored = memory.get(k, book) if k else None
+            restored = plan_from_json(stored.get("plan")) if isinstance(stored, dict) else None
+            if restored is not None:
+                if k != key and memory.writable:
+                    memory.put(key, book, stored["plan"], stored.get("source", "AI"))   # ถามซ้ำต้องได้เหมือนเดิมแม้ตำแหน่งที่แชร์ถูกแก้
+                return restored
         if not memory.writable:
             return plan
     if not selector:
@@ -1608,6 +1937,8 @@ def _decide(query, plan, selector, memory):
         source = "ค้นเอง (AI ไม่พบหรือผลไม่ผ่านการตรวจ)"
     if memory is not None:
         memory.put(key, book, plan_to_json(plan), source)
+        if shared and source == "AI" and memory.get(shared, book) is None:
+            memory.put(shared, book, plan_to_json(plan), source)     # ใช้ร่วมกันเฉพาะผลที่ AI เลือกจริง
     return plan
 
 
@@ -1674,7 +2005,12 @@ def answer_from_dataset(history, selector=None, memory=None):
     # นอกนั้นใช้คำตอบที่จำไว้ หรือให้ AI ช่วยตีความแล้วจำไว้
     plan, sure = _plan(query)
     comparing = len(_asked_terms(query)) > 1 and bool(_COMPARE_RE.search(query))
-    if not sure:
+    qtype = question_type(query)
+    by_name = _names_heading(query)             # ถามด้วยชื่อ/เลขหัวข้อเต็ม = ต้องการทั้งหัวข้อ
+    analytic = qtype in ANALYTIC_TYPES and not comparing and not by_name
+    if analytic and qtype == "example" and plan:
+        plan = _example_plan([e for e, _ in plan], _subject(query)) or plan
+    if not sure or analytic:
         plan = _decide(query, plan, selector, memory)
         if comparing:
             plan = _brief_plan(plan)
@@ -1682,4 +2018,11 @@ def answer_from_dataset(history, selector=None, memory=None):
         plan = plan_answer(questions[-2] + " " + query)
     if not plan:
         return NO_DATA
-    return render_compared(plan, _asked_terms(query)) if comparing else render_plan(plan)
+    if comparing:
+        return render_compared(plan, _asked_terms(query))
+    if qtype == "compare" and len({e["topic"] for e, picked in plan if picked != LINK}) > 1:
+        return render_compared(_brief_plan(plan), _asked_terms(query))    # "join สองแบบนี้ต่างกันตรงไหน" AI หาได้สองหัวข้อ
+    if not by_name and (not sure or qtype != "topic"):
+        # คำถามชนิดไหนก็ตอบแค่ส่วนที่ต้องการ: เนื้อหาไม่เกินเพดานของชนิดนั้น (พิมพ์ชื่อหัวข้อเฉย ๆ ที่ระบบมั่นใจได้ทั้งหัวข้อตามเดิม)
+        plan = _limit_plan(plan, TYPE_CEILING.get(qtype, TYPE_CEILING["topic"]), examples=qtype not in ("example", "meaning"))
+    return render_plan(plan)

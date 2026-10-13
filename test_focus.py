@@ -269,6 +269,130 @@ class FocusedAnswers(unittest.TestCase):
         self.assertFalse(any(e['topic'].startswith('7.4 ') for e, _, _ in index[kb._term_key('Partial Dependency')]))
 
 
+class AnalyticQuestions(unittest.TestCase):
+    """คำถามเชิงวิเคราะห์ (ตัวอย่าง/เหตุผล/ขั้นตอน/ข้อดี/อธิบาย/สรุป): ได้เฉพาะส่วนที่ถาม ไม่ใช่ทั้งหัวข้อ"""
+
+    def setUp(self):
+        env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key'})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def use(self, fake):
+        p = patch.object(ai_select, '_generate', fake)
+        p.start()
+        self.addCleanup(p.stop)
+        return fake
+
+    def test_question_types(self):
+        for q, want in [('ขอตัวอย่างคีย์นอก', 'example'), ('ยกตัวอย่างการใช้ group by', 'example'),
+                        ('ทำไมต้องทำ normalization', 'why'), ('ประโยชน์ของคีย์นอก', 'why'),
+                        ('คีย์มีกี่ประเภท', 'properties'), ('ข้อดีของ DBMS', 'properties'),
+                        ('ขั้นตอนการทำ 2NF', 'steps'), ('group by ใช้ยังไง', 'steps'),
+                        ('สรุปเรื่อง ER diagram', 'summary'), ('ทูเพิลคืออะไร', 'meaning'),
+                        ('อธิบายเรื่องคีย์หลัก', 'explain'), ('inner join กับ left join ต่างกันยังไง', 'compare'),
+                        ('GROUP BY', 'topic')]:
+            with self.subTest(q=q):
+                self.assertEqual(kb.question_type(q), want)
+
+    def test_segments_cover_the_paragraph_without_breaking_brackets(self):
+        checked = 0
+        for e in kb.ENTRIES:
+            for u in kb.units(e):
+                segs = kb.segments(u)
+                self.assertEqual(segs[0][0], 0)
+                self.assertEqual(segs[-1][1], len(u))
+                for (a, b), (c, d) in zip(segs, segs[1:]):
+                    self.assertLessEqual(b, c)
+                    self.assertEqual(u[b:c].strip(), '')                    # ระหว่างประโยคมีแต่ช่องว่าง
+                    self.assertEqual(u.count('(', 0, b), u.count(')', 0, b))  # ไม่ตัดกลางวงเล็บ
+                if len(u) < 160:
+                    self.assertEqual(len(segs), 1)
+                checked += len(segs) > 1
+        self.assertGreater(checked, 300)                                    # ย่อหน้ายาวถูกแบ่งเป็นประโยคจริง
+
+    def test_every_offline_analytic_answer_stays_within_its_ceiling(self):
+        for case in ev.ANALYTIC_CASES:
+            if case.get('ai'):
+                continue
+            with self.subTest(q=case['q']):
+                answer = ask(case['q'])
+                self.assertEqual(ev.check(kb, case, answer), [])
+                limit = kb.TYPE_CEILING[kb.question_type(case['q'])] + 700
+                self.assertLessEqual(len(ev.content(kb, answer)), limit)
+                FocusedAnswers.assertVerbatim(self, answer)
+
+    def test_limit_cuts_at_a_sentence_and_offers_the_whole_topic(self):
+        entry = next(e for e in kb.ENTRIES if e['topic'].startswith('7.6 '))
+        plan = kb._limit_plan([(entry, None)], 600)
+        answer = kb.render_plan(plan)
+        self.assertLess(len(ev.content(kb, answer)), 600 + 700)
+        self.assertIn(kb.PARTIAL_NOTE, answer)
+        self.assertIn('[[ถาม:' + entry['topic'] + ']]', answer)             # ปุ่มอ่านทั้งหัวข้อ
+        FocusedAnswers.assertVerbatim(self, answer)
+        # ไม่เกินเพดานอยู่แล้ว = ไม่แตะแผน
+        short = next(e for e in kb.ENTRIES if len(e['description']) < 500)
+        self.assertEqual(kb._limit_plan([(short, None)], 600), [(short, None)])
+
+    def test_typed_heading_is_not_an_analytic_question(self):
+        fake = self.use(FakeGemini(sections=[0]))
+        for q in ['ชนิดของแฟ้มข้อมูล', '7.5', 'ข้อดีของแบบจำลองฐานข้อมูลเชิงสัมพันธ์', 'ประเภทของคีย์']:
+            ask(q, selector=ai_select.plan_answer)
+        self.assertEqual(fake.calls, [])
+
+    def test_ai_picks_sentences_and_only_those_are_shown(self):
+        i = topic_index('4.5 ประเภทของคีย์ · 4.')
+        us = kb.units(kb.ENTRIES[i])
+        k = 0
+        segs = kb.segments(us[k])
+        self.assertGreater(len(segs), 2)
+        n = next(n for n, (a, b) in enumerate(segs) if us[k][a:b].lstrip().startswith('เช่น'))
+        fake = self.use(FakeGemini(sections=[i], paragraphs=[f'{i}.{k}.{n + 1}', f'{i}.{k}.99', 'x', f'{i}.999.1']))
+        answer = ask('ขอตัวอย่างคีย์นอก', selector=ai_select.plan_answer)
+        a, b = segs[n]
+        body = ev.content(kb, answer).strip()
+        self.assertTrue(body.startswith('… ' + us[k][a:b].strip()[:40]))   # เฉพาะประโยคที่ AI เลือก (เลขเกิน/ผิดรูปแบบถูกทิ้ง)
+        self.assertNotIn('คีย์นอก หมายถึง', body)
+        FocusedAnswers.assertVerbatim(self, answer)
+        # AI ได้เห็นชนิดคำถามและประโยคที่มีเลขกำกับ
+        prompt = fake.calls[1][1]
+        self.assertIn('ชนิดคำถาม: example', prompt)
+        self.assertIn(f'[{i}.{k}.1]', prompt)
+
+    def test_every_sentence_chosen_counts_as_the_whole_paragraph(self):
+        i = topic_index('4.5 ประเภทของคีย์ · 4.')
+        count = len(kb.segments(kb.units(kb.ENTRIES[i])[0]))
+        self.use(FakeGemini(sections=[i], paragraphs=[f'{i}.0.{n}' for n in range(1, count + 1)]))
+        plan = ai_select.plan_answer('คีย์นอกสำคัญยังไง')
+        self.assertIn(0, plan[0][1])                                        # ไม่ใช่ช่วง: ทั้งย่อหน้า
+
+    def test_paraphrases_share_the_answer_of_the_same_type_and_topic(self):
+        i = topic_index('4.5 ประเภทของคีย์ · 4.')
+        fake = self.use(FakeGemini(sections=[i], paragraphs=[f'{i}.0.2']))
+        memory = temp_memory(self)
+        sel = ai_select.plan_answer
+        ask_mem = lambda q, mem: kb.answer_from_dataset([{'role': 'user', 'content': q}], selector=sel, memory=mem)
+        first = ask_mem('ขอตัวอย่างคีย์นอก', memory)
+        calls = len(fake.calls)
+        for q in ['ยกตัวอย่างคีย์นอก', 'ตัวอย่างคีย์นอก', 'ขอตัวอย่างของคีย์นอกหน่อย']:
+            self.assertEqual(ask_mem(q, memory), first)
+        self.assertEqual(len(fake.calls), calls)                           # ไม่เรียก AI เพิ่ม
+        # เว็บ (ไฟล์อ่านอย่างเดียว) ใช้คำตอบเดียวกันกับคำถามที่พิมพ์ต่าง และไม่เรียก AI สด
+        readonly = AnswerMemory(memory.path, writable=False)
+        self.assertEqual(ask_mem('ยกตัวอย่าง foreign key', readonly), first)   # ชื่ออังกฤษของหัวข้อเดียวกัน
+        self.assertEqual(ask_mem('ขอตัวอย่างคีย์นอกครับ', readonly), first)
+        self.assertEqual(len(fake.calls), calls)
+        # ชนิดต่าง/หัวข้อต่าง ไม่ปนกัน
+        self.assertNotEqual(kb.typed_key('ขอตัวอย่างคีย์นอก'), kb.typed_key('ประโยชน์ของคีย์นอก'))
+        self.assertNotEqual(kb.typed_key('ขอตัวอย่างคีย์นอก'), kb.typed_key('ขอตัวอย่างคีย์หลัก'))
+
+    def test_failed_ai_answer_is_not_shared_between_paraphrases(self):
+        error = urllib.error.HTTPError('https://x', 503, 'Unavailable', {}, BytesIO(b'{}'))
+        self.use(FakeGemini(error=error))
+        memory = temp_memory(self)
+        kb.answer_from_dataset([{'role': 'user', 'content': 'ขอตัวอย่างคีย์นอก'}], selector=ai_select.plan_answer, memory=memory)
+        self.assertIsNone(memory.get(kb.typed_key('ขอตัวอย่างคีย์นอก'), kb.DOCUMENT_META.get('markdown_sha256')))
+
+
 class AiSelector(unittest.TestCase):
     def setUp(self):
         env = patch.dict(os.environ, {'GEMINI_API_KEY': 'test-key'})
@@ -325,8 +449,12 @@ class AiSelector(unittest.TestCase):
         i, j = topic_index('10.5 '), topic_index('10.6 ')
         self.use(FakeGemini(sections=[i, j], paragraphs=[]))
         answer = ask('join สองแบบนี้ใช้ต่างกันตรงไหน', selector=ai_select.plan_answer)
-        self.assertIn(kb.with_figures(kb.ENTRIES[i]['description']), answer)
-        self.assertIn(kb.with_figures(kb.ENTRIES[j]['description']), answer)
+        # ทั้งสองหัวข้อยังอยู่ (ไม่ถูกทิ้ง) แต่เป็นคำถามเปรียบเทียบ จึงแสดงแค่ใจความเปิดของแต่ละหัวข้อ + ปุ่มอ่านหัวข้อเต็ม
+        heads = [l[3:] for l in answer.split('\n') if l.startswith('## ')]
+        self.assertEqual(heads, [kb.ENTRIES[i]['topic'], kb.ENTRIES[j]['topic']])
+        self.assertLess(len(ev.content(kb, answer)), 700)
+        self.assertIn(f"[[ถาม:{kb.ENTRIES[i]['topic']}]]", answer)
+        FocusedAnswers.assertVerbatim(self, answer)
 
     def test_topic_the_ai_read_and_rejected_is_dropped(self):
         # AI เลือกหลายหัวข้อ แต่พออ่านเนื้อหาแล้วเลือกย่อหน้าจากหัวข้อเดียว: หัวข้อที่แค่ชื่อคล้ายไม่ถูกแสดง

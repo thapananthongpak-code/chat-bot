@@ -26,6 +26,7 @@ API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:gener
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 TIMEOUT = 15          # วินาทีต่อการเรียกหนึ่งครั้ง ช้ากว่านี้ใช้วิธีค้นแบบเดิมแทน
 MAX_SECTIONS = 3
+AI_FOCUS_MIN_CHARS = 600   # หัวข้อสั้นกว่านี้แสดงทั้งหัวข้อได้เลย ไม่ต้องให้ AI เลือกประโยค
 PARA_PREVIEW = 300    # AI เห็นแต่ละย่อหน้าแค่ช่วงต้น พอให้รู้ว่าพูดเรื่องอะไร (ประหยัดเวลาและโควตา)
 
 
@@ -72,14 +73,17 @@ Return the ids of the sections whose text answers the question, best first, at m
 - The book teaches with Microsoft Access (appendix ข and the security chapter show how to do things in Access), so Access how-to questions are covered.
 - Return an empty list only when no section explains what is asked: unrelated subjects, other programming languages, other database products (MySQL, Oracle…) or SQL features that no section covers (transactions, stored procedures, triggers, CTE…). Do not guess."""
 
-FOCUS_SYSTEM = """You pick paragraphs from a Thai textbook on database systems that answer a student's question.
-You never write the answer yourself; you only return paragraph labels.
-Input: the question, then the paragraphs of one or more sections, each labelled [section.paragraph] (long paragraphs are cut short with …).
-Return the labels of the paragraphs the student needs to read to answer the question completely, and nothing more:
-- include the paragraphs that directly explain what is asked, plus the example, table, figure caption or SQL that illustrates it right after them;
-- leave out paragraphs about other concepts, general introductions, and further examples the question does not ask for;
+FOCUS_SYSTEM = """You pick sentences from a Thai textbook on database systems that answer a student's question.
+You never write the answer yourself; you only return labels.
+Input: the question and its type, then the paragraphs of one or more sections. Short paragraphs are labelled [section.paragraph].
+Long paragraphs are split into sentences labelled [section.paragraph.sentence].
+Return the labels the student needs to read to get the answer, and nothing more. The shorter the better, as long as the answer is complete:
+- choose the sentences that directly answer what is asked; a paragraph may be only partly relevant, so pick its sentences one by one;
+- add the table, SQL block or figure caption right after a chosen sentence only when that sentence introduces it ("ดังตารางต่อไปนี้", "ดังนี้");
+- leave out other concepts, general introductions, repeated explanations and examples the question does not ask for;
 - if the question asks for a whole list (types, steps, advantages, commands…), include every item of that list and each item's explanation;
-- if no paragraph answers the question, return an empty list."""
+- never return more than about 1,500 characters of text in total;
+- if nothing answers the question, return an empty list."""
 
 
 def _catalog():
@@ -112,30 +116,8 @@ def _preview(text):
 
 
 def attach(us, picked):
-    """ย่อหน้าที่ต้องไปด้วยกัน แม้ AI ไม่ได้เลือก: ตาราง/โค้ด/ที่มาของรูปที่ตามหลังย่อหน้าที่เลือก,
-    คำบรรยายรูป "ภาพที่ X" คู่กับคำอธิบาย "จากภาพที่ X", และบรรทัดเนื้อหาของหัวข้อย่อยที่เลือก"""
-    out = set(picked)
-    for k in sorted(picked):
-        j = k + 1
-        while j < len(us) and (us[j].startswith("```") or " | " in us[j] or re.match(r"^ที่มา\s*:?", us[j])):
-            out.add(j)
-            j += 1
-        cap = kb._CAPTION.match(us[k].strip())
-        if cap or _is_heading_only(us[k]):   # เลือกคำบรรยายรูป/หัวเรื่อง ต้องได้คำอธิบายที่ตามมาด้วย
-            if j < len(us) and not kb._CAPTION.match(us[j]):
-                out.add(j)
-        ref = re.match(r"^จาก\s*(ภาพ|ตาราง)ที่\s*(\d+\.\d+)", us[k].strip())
-        if ref:   # "จากภาพที่ 1.2 …" ต้องมีรูป 1.2 ให้เห็นด้วย
-            for j in range(k - 1, max(-1, k - 12), -1):
-                if re.match(r"^" + ref.group(1) + r"ที่\s*" + re.escape(ref.group(2)) + r"(?!\d)", us[j].strip()):
-                    out.update(range(j, k))
-                    break
-    return sorted(out)
-
-
-def _is_heading_only(u):
-    names, full = kb._defined_terms(u)
-    return bool(names) and not full
+    """ย่อหน้าที่ต้องไปด้วยกันแม้ AI ไม่ได้เลือก (ตาราง/โค้ด/รูปที่เกริ่นไว้) ดู knowledge_base.attach_units"""
+    return kb.attach_units(us, picked)
 
 
 def route(query):
@@ -145,19 +127,58 @@ def route(query):
     return list(dict.fromkeys(ids))[:MAX_SECTIONS]
 
 
-def focus(query, ids):
-    """ย่อหน้าที่ AI เลือกในแต่ละหัวข้อ {เลขหัวข้อ: [เลขย่อหน้า]} (ตรวจแล้วว่ามีจริง)"""
-    blocks = []
-    for i in ids:
-        us = kb.units(kb.ENTRIES[i])
-        blocks.append(f"## {kb.ENTRIES[i]['topic']}\n" + "\n".join(f"[{i}.{k}] {_preview(u)}" for k, u in enumerate(us)))
-    got = _generate(FOCUS_SYSTEM, f"คำถาม: {query}\n\n" + "\n\n".join(blocks), _schema("paragraphs", "STRING"))
-    picked = {}
+def _numbered(i, us):
+    """ย่อหน้าของหัวข้อ i พร้อมเลขกำกับ: ย่อหน้าร้อยแก้วยาวแบ่งเป็นประโยค [หัวข้อ.ย่อหน้า.ประโยค] ที่เหลือเป็นก้อนเดียว"""
+    lines = []
+    for k, u in enumerate(us):
+        segs = kb.segments(u)
+        if len(segs) > 1:
+            lines += [f"[{i}.{k}.{n}] {re.sub(chr(10), ' ', u[a:b]).strip()}" for n, (a, b) in enumerate(segs, 1)]
+        else:
+            lines.append(f"[{i}.{k}] {_preview(u)}")
+    return "\n".join(lines)
+
+
+def focus(query, ids, qtype="topic"):
+    """ย่อหน้า/ประโยคที่ AI เลือกในแต่ละหัวข้อ {เลขหัวข้อ: [เลขย่อหน้า หรือช่วง (ย่อหน้า, เริ่ม, จบ)]} (ตรวจแล้วว่ามีจริง)
+    ถ้าเลือกครบทุกประโยคของย่อหน้า นับเป็นทั้งย่อหน้า ประโยคที่ติดกันรวมเป็นช่วงเดียว"""
+    blocks = [f"## {kb.ENTRIES[i]['topic']}\n" + _numbered(i, kb.units(kb.ENTRIES[i])) for i in ids]
+    hint = kb.TYPE_HINT.get(qtype, "")
+    prompt = f"คำถาม: {query}\n" + (f"ชนิดคำถาม: {qtype}. {hint}\n" if hint else "") + "\n" + "\n\n".join(blocks)
+    got = _generate(FOCUS_SYSTEM, prompt, _schema("paragraphs", "STRING"))
+    chosen = {}                                # {หัวข้อ: {ย่อหน้า: {ประโยค} หรือ None = ทั้งย่อหน้า}}
     for label in got.get("paragraphs", []):
-        m = re.fullmatch(r"\[?(\d+)\.(\d+)\]?", str(label).strip())
-        if m and int(m.group(1)) in ids and int(m.group(2)) < len(kb.units(kb.ENTRIES[int(m.group(1))])):
-            picked.setdefault(int(m.group(1)), set()).add(int(m.group(2)))
-    return {i: sorted(ks) for i, ks in picked.items()}
+        m = re.fullmatch(r"\[?(\d+)\.(\d+)(?:\.(\d+))?\]?", str(label).strip())
+        if not m or int(m.group(1)) not in ids:
+            continue
+        i, k = int(m.group(1)), int(m.group(2))
+        us = kb.units(kb.ENTRIES[i])
+        if k >= len(us):
+            continue
+        paras = chosen.setdefault(i, {})
+        if m.group(3) is None:
+            paras[k] = None
+        else:
+            n = int(m.group(3)) - 1
+            if 0 <= n < len(kb.segments(us[k])) and paras.get(k, set()) is not None:
+                paras.setdefault(k, set()).add(n)
+    picked = {}
+    for i, paras in chosen.items():
+        us, items = kb.units(kb.ENTRIES[i]), []
+        for k, ns in paras.items():
+            segs = kb.segments(us[k])
+            if ns is None or len(ns) == len(segs):
+                items.append(k)
+                continue
+            run = []
+            for n in sorted(ns) + [None]:
+                if run and (n is None or n != run[-1] + 1):
+                    items.append((k, segs[run[0]][0], segs[run[-1]][1]))
+                    run = []
+                if n is not None:
+                    run.append(n)
+        picked[i] = kb._normalize_picks(items)
+    return picked
 
 
 _ERRORS = (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError)
@@ -171,8 +192,8 @@ def _log(exc):
 
 
 def _select(query):
-    """(เลขหัวข้อ, {เลขหัวข้อ: ย่อหน้าที่เลือก / [] หรือ "all" = ทั้งหัวข้อ / "drop" = ไม่ใช้}) หรือ None เมื่อเรียก AI ไม่ได้
-    เรียก AI ไม่เกินสองครั้ง: เลือกหัวข้อ แล้วเลือกย่อหน้า (ข้ามรอบสองเมื่อได้หัวข้อสั้นหัวข้อเดียว
+    """(เลขหัวข้อ, {เลขหัวข้อ: ย่อหน้า/ช่วงที่เลือก / [] หรือ "all" = ทั้งหัวข้อ / "drop" = ไม่ใช้}) หรือ None เมื่อเรียก AI ไม่ได้
+    เรียก AI ไม่เกินสองครั้ง: เลือกหัวข้อ แล้วเลือกประโยค (ข้ามรอบสองเมื่อได้หัวข้อสั้นหัวข้อเดียว
     หรือระบบหาย่อหน้านิยามของศัพท์ที่ถามได้เอง) ผลที่ได้ knowledge_base จำไว้ใน answer_memory"""
     try:
         ids = route(query)
@@ -188,7 +209,7 @@ def _select(query):
         e = kb.ENTRIES[i]
         if e["topic"] in groups:
             picked[i] = "all"
-        elif len(e["description"]) < kb.FOCUS_MIN_CHARS:
+        elif len(e["description"]) < AI_FOCUS_MIN_CHARS:
             picked[i] = [] if len(ids) == 1 else None   # หัวข้อสั้นหัวข้อเดียว แสดงทั้งหัวข้อได้เลย
         else:
             # ถามความหมายของศัพท์ที่หัวข้อนี้นิยามไว้ ระบบหาย่อหน้านิยามได้เอง ไม่ต้องใช้โควตา AI
@@ -196,17 +217,15 @@ def _select(query):
     need = [i for i in ids if picked[i] is None]
     if need:
         try:
-            chosen = focus(query, need)
+            chosen = focus(query, need, kb.question_type(query))
         except _ERRORS as exc:
-            _log(exc)                          # เลือกหัวข้อได้แล้วแต่เลือกย่อหน้าไม่ได้: แสดงทั้งหัวข้อ
+            _log(exc)                          # เลือกหัวข้อได้แล้วแต่เลือกประโยคไม่ได้: แสดงทั้งหัวข้อ (ถูกจำกัดความยาวภายหลัง)
             return ids, {i: (p if p is not None else "all") for i, p in picked.items()}
         for i in need:
             if not chosen:
-                picked[i] = "all"              # AI ไม่เลือกย่อหน้าเลยสักหัวข้อ: แสดงหัวข้อที่เลือกมาทั้งหมด
+                picked[i] = "all"              # AI ไม่เลือกเลยสักหัวข้อ: แสดงหัวข้อที่เลือกมาทั้งหมด
             elif not chosen.get(i):
-                picked[i] = "drop"             # อ่านเนื้อหาแล้วไม่มีย่อหน้าที่ตอบคำถาม (หัวข้อที่แค่ชื่อคล้าย)
-            elif len(kb.ENTRIES[i]["description"]) < kb.FOCUS_MIN_CHARS:
-                picked[i] = []                 # หัวข้อสั้นที่ตอบคำถาม แสดงทั้งหัวข้อ
+                picked[i] = "drop"             # อ่านเนื้อหาแล้วไม่มีประโยคที่ตอบคำถาม (หัวข้อที่แค่ชื่อคล้าย)
             else:
                 picked[i] = attach(kb.units(kb.ENTRIES[i]), chosen[i])
     return ids, picked

@@ -48,7 +48,7 @@ class DatasetOnlyTests(unittest.TestCase):
                 data = (Path(kb.FIGURE_DIR) / f['file']).read_bytes()
                 self.assertEqual(hashlib.sha256(data).hexdigest(), f['sha256'])
                 self.assertRegex(text, r'(?m)^ภาพที่\s*' + re.escape(f['figure']) + r'(?!\d)')
-        answer = kb.answer_from_dataset([{'role': 'user', 'content': 'ER Diagram คืออะไร'}])
+        answer = kb.answer_from_dataset([{'role': 'user', 'content': 'ภาพที่ 5.1'}])
         self.assertIn('![ภาพที่ 5.1](/static/figures/fig_5_1.webp)', answer)
 
     def test_every_topic_answer_is_complete(self):

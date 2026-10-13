@@ -53,11 +53,18 @@ class DatasetTests(unittest.TestCase):
     def test_whole_section_is_not_cut(self):
         # หัวข้อที่ถูกแบ่งส่วน ถามหัวข้อหลักต้องได้ครบทุกส่วน ไม่ใช่แค่ย่อหน้านำ ("…ดังรายละเอียดต่อไปนี้")
         ask = lambda q: kb.answer_from_dataset([{'role': 'user', 'content': q}])
-        for query in ['ประเภทของคีย์', 'คีย์มีกี่ประเภท', '4.5']:
+        for query in ['ประเภทของคีย์', '4.5']:
             with self.subTest(query=query):
                 answer = ask(query)
                 for part in [e for e in kb.ENTRIES if e['topic'].startswith('4.5 ประเภทของคีย์')]:
                     self.assertIn(kb.with_figures(part['description']), answer)   # เนื้อหาครบ (พร้อมรูปในตำรา)
+        # ถามเป็นคำถาม ("คีย์มีกี่ประเภท") ได้ใจความเปิดของทุกส่วน ไม่ใช่ทั้งหัวข้อ แต่ครบทุกประเภท
+        answer = ask('คีย์มีกี่ประเภท')
+        for part in [e for e in kb.ENTRIES if e['topic'].startswith('4.5 ประเภทของคีย์ · ')]:
+            self.assertIn('## ' + part['topic'] + '\n', answer)
+        self.assertIn('ซุปเปอร์คีย์ หมายถึง', answer)
+        self.assertIn('คีย์สำรอง หมายถึง', answer)
+        self.assertLess(len(answer), 4000)
         # ถามเจาะจงส่วนเดียว ได้ส่วนนั้นส่วนเดียว
         answer = ask('คีย์หลักคืออะไร')
         self.assertIn('## 4.5 ประเภทของคีย์ · 3. คีย์หลัก (Primary Key)', answer)
@@ -88,9 +95,14 @@ class DatasetTests(unittest.TestCase):
         for query in ['GROUP BY', 'คีย์หลัก', 'LEFT JOIN']:
             entries = kb.search(query, 2)
             answer = kb.answer_from_dataset([{'role': 'user', 'content': query}])
+            body = answer.split('\n\nแหล่งข้อมูล:')[0]
             for entry in entries:
-                self.assertIn(entry['description'], answer)
                 self.assertIn(entry['source'], answer)
+                # ตอบไม่เกินเพดานของคำถามพิมพ์แค่ชื่อเรื่อง แต่ทุกบรรทัดที่แสดงมาจากหัวข้อนั้นตรงตัว และเริ่มจากต้นหัวข้อ
+                self.assertIn(entry['description'].split('\n')[0].rstrip(' …')[:80], body)
+            lines = entries[0]['description'].split('\n')
+            for line in body.split('\n')[2:]:
+                self.assertTrue(any(line.removesuffix(' …').removeprefix('… ') in book for book in lines) or line == '')
         # หัวข้อยาวที่ถามเจาะจงส่วนเดียว ได้เฉพาะส่วนนั้น แต่ทุกบรรทัดยังเป็นข้อความในหัวข้อนั้นตรงตัว
         answer = kb.answer_from_dataset([{'role': 'user', 'content': 'COUNT()'}])
         entry = kb.search('COUNT()', 1)[0]

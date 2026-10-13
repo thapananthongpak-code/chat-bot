@@ -176,6 +176,32 @@ PARAPHRASE_CASES = [
     dict(q="คำสั่งที่ใช้สร้างตาราง", topic="8.3 ", has=["CREATE TABLE"]),
 ]
 
+# ชุด "คำถามเชิงวิเคราะห์": ขอตัวอย่าง / เหตุผล / ขั้นตอน / ข้อดี / อธิบาย / สรุป ต้องได้เฉพาะส่วนที่ถาม ไม่ใช่ทั้งหัวข้อ
+# max_chars = เพดานของชนิดคำถาม (knowledge_base.TYPE_CEILING) บวกส่วนที่เกินได้ (สูงสุด 700) เพื่อให้จบรายการ/ตาราง/โค้ดที่เริ่มไว้
+# ข้อที่ระบุ ai=True ต้องใช้ AI (หรือคำตอบที่จำไว้) เพื่อได้ประโยคที่ตรงที่สุด ไม่ใช้ AI ได้แค่หัวข้อถูกและไม่ยาวเกิน
+ANALYTIC_CASES = [
+    dict(q="ขอตัวอย่างคีย์นอก", topic="4.5 ประเภทของคีย์ · 4.", max_chars=1300,
+         has=["ตารางแผนกและตารางพนักงาน"], lacks=["คีย์นอก หมายถึง คีย์ที่อ้างอิงมา"]),
+    dict(q="ยกตัวอย่างความสัมพันธ์แบบ one to many", topic="5.6 ประเภทความสัมพันธ์ · 2.", max_chars=1300,
+         has=["ประเภทสินค้า"], lacks=["หมายถึง เอ็นทิตี้ที่มีความสัมพันธ์แบบหนึ่งสิ่งต่อหลายสิ่ง เช่น"]),
+    dict(q="ยกตัวอย่างการใช้ group by", topic="9.11 ", max_chars=2200, has=["```sql"]),
+    dict(q="ตัวอย่าง inner join", topic="10.5 ", max_chars=2300, has=["INNER JOIN"]),
+    dict(q="ประโยชน์ของคีย์นอก", topic="4.5 ประเภทของคีย์ · 4.", max_chars=1500, has=["คีย์นอก"]),
+    dict(q="ทำไมต้องทำ normalization", topic="บทที่ 7 ", max_chars=1500, has=["ความซ้ำซ้อน"]),
+    dict(q="ขั้นตอนการทำ 2NF", topic="7.6 ", max_chars=2300, has=["2NF"]),
+    dict(q="ข้อดีของ DBMS", topic="2.3 ", max_chars=1900),
+    dict(q="group by ใช้ยังไง", topic="9.11 ", max_chars=2200, has=["GROUP BY"]),
+    dict(q="อธิบายเรื่องคีย์หลัก", topic="4.5 ประเภทของคีย์ · 3.", max_chars=1500, has=["คีย์หลัก หมายถึง"]),
+    dict(q="อธิบายความสัมพันธ์แบบ many to many", topic="5.6 ประเภทความสัมพันธ์ · 3.", max_chars=1500, has=["M:N"]),
+    dict(q="สรุปเรื่อง ER diagram", topic="บทสรุป บทที่ 5", max_chars=1300),
+    dict(q="ปัญญาประดิษฐ์คืออะไร", topic="11.6 ", max_chars=1700, has=["ปัญญาประดิษฐ์ คือ"]),   # ย่อหน้านิยาม 895 + ข้อที่นิยามเกริ่นไว้
+    dict(q="SQL แบ่งเป็นกี่ประเภท", topic="8.1 ", max_chars=1400, has=["DDL", "DML", "DCL"]),
+    dict(q="ขั้นตอนการทำ 1NF", topic="7.5 ", max_chars=2300),
+    dict(q="ข้อดีของวิธีฐานข้อมูลมีอะไรบ้าง", topic="2.5 ", max_chars=1500),
+    dict(q="ข้อเสียของระบบแฟ้มข้อมูล", topic="1.6 ", max_chars=1500, ai=True),
+    dict(q="ทำไมต้องมีคีย์หลัก", topic="4.5 ประเภทของคีย์ · 3.", max_chars=1500),
+]
+
 # ชุด "นอกตำรา": ต้องตอบว่าไม่มีข้อมูล ไม่ใช่ดึงหัวข้อที่แค่มีคำคล้ายกันมาตอบ
 OUTSIDE_CASES = [dict(q=q, topic=None) for q in [
     "ราคาทองวันนี้", "วิธีทำต้มยำกุ้ง", "ภาษา C คืออะไร", "python list comprehension", "Transaction คืออะไร",
@@ -261,7 +287,8 @@ def main():
         return kb.answer_from_dataset([{"role": "user", "content": q}], selector=selector, memory=mem)
 
     groups = [("หัวข้อตามสารบัญ", toc_cases(kb)), ("หัวเรื่องย่อยในเนื้อหา", HEADING_CASES),
-              ("ที่ผู้ใช้รายงาน", REPORTED_CASES), ("เปรียบเทียบ", COMPARE_CASES), ("พิมพ์เอง", NATURAL_CASES), ("พิมพ์เองแบบถ้อยคำอื่น", PARAPHRASE_CASES), ("นอกตำรา", OUTSIDE_CASES)]
+              ("ที่ผู้ใช้รายงาน", REPORTED_CASES), ("เปรียบเทียบ", COMPARE_CASES), ("เชิงวิเคราะห์", ANALYTIC_CASES),
+              ("พิมพ์เอง", NATURAL_CASES), ("พิมพ์เองแบบถ้อยคำอื่น", PARAPHRASE_CASES), ("นอกตำรา", OUTSIDE_CASES)]
     total_fail = 0
     for name, cases in groups:
         fails = need_ai = 0
